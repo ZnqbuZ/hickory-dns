@@ -35,3 +35,5 @@ pub trait Transport: Send + 'static {
         context: Arc<ServerContext<H>>,
     ) -> Result<impl Future<Output = Result<(), NetError>> + Send + 'static, NetError>;
 }
+
+pub use super::udp_transport::Udp;
