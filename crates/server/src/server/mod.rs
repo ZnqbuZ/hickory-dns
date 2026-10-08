@@ -73,6 +73,9 @@ mod h2_handler;
 mod h3_handler;
 #[cfg(feature = "__quic")]
 mod quic_handler;
+pub mod transport;
+pub use transport::Transport;
+
 mod request_handler;
 pub use request_handler::{Request, RequestHandler, RequestInfo, ResponseInfo};
 mod response_handler;
@@ -80,37 +83,43 @@ pub use response_handler::{ResponseHandle, ResponseHandler};
 mod timeout_stream;
 pub use timeout_stream::TimeoutStream;
 
-// TODO, would be nice to have a Slab for buffers here...
-/// A Futures based implementation of a DNS server
+/// A Futures-based implementation of a DNS server.
 pub struct Server<T: RequestHandler> {
     context: Arc<ServerContext<T>>,
     join_set: JoinSet<Result<(), NetError>>,
 }
 
 impl<T: RequestHandler> Server<T> {
-    /// Creates a new ServerFuture with the specified Handler.
+    /// Creates a new Server with the specified Handler.
     pub fn new(handler: T) -> Self {
         Self::with_access(handler, [], [])
     }
 
-    /// Creates a new ServerFuture with the specified Handler and denied/allowed networks
+    /// Creates a new Server with the specified Handler and denied/allowed networks.
     pub fn with_access(
         handler: T,
         denied_networks: impl IntoIterator<Item = IpNet>,
         allowed_networks: impl IntoIterator<Item = IpNet>,
     ) -> Self {
-        let mut access = AccessControl::default();
-        access.insert_deny(denied_networks);
-        access.insert_allow(allowed_networks);
-
         Self {
-            context: Arc::new(ServerContext {
+            context: Arc::new(ServerContext::new(
                 handler,
-                access,
-                shutdown: CancellationToken::new(),
-            }),
+                denied_networks,
+                allowed_networks,
+            )),
             join_set: JoinSet::new(),
         }
+    }
+
+    /// Registers a transport on this server.
+    ///
+    /// Required synchronous initialization (such as QUIC socket wrapping and
+    /// endpoint setup) is performed immediately. On success, the transport's
+    /// long-running task is spawned into the server's task set.
+    pub fn register(&mut self, transport: impl Transport) -> Result<(), NetError> {
+        let task = transport.into_future(self.context.clone())?;
+        self.join_set.spawn(task);
+        Ok(())
     }
 
     /// Register a UDP socket. Should be bound before calling this function.
@@ -440,7 +449,7 @@ impl<T: RequestHandler> Server<T> {
     /// Triggers a graceful shutdown the server. All background tasks will stop accepting
     /// new connections and the returned future will complete once all tasks have terminated.
     pub async fn shutdown_gracefully(&mut self) -> Result<(), NetError> {
-        self.context.shutdown.cancel();
+        self.context.shutdown_token().cancel();
 
         // Wait for the server to complete.
         self.block_until_done().await
@@ -448,10 +457,10 @@ impl<T: RequestHandler> Server<T> {
 
     /// Returns a reference to the [`CancellationToken`] used to gracefully shut down the server.
     ///
-    /// Once cancellation is requested, all background tasks will stop accepting new connections,
-    /// and `block_until_done()` will complete once all tasks have terminated.
+    /// Once cancellation is requested, transports stop accepting new work.
+    /// `block_until_done()` waits for the registered transport tasks to finish.
     pub fn shutdown_token(&self) -> &CancellationToken {
-        &self.context.shutdown
+        self.context.shutdown_token()
     }
 
     /// This will run until all background tasks complete. If one or more tasks return an error,
@@ -722,14 +731,38 @@ pub fn default_tls_server_config(
     Ok(config)
 }
 
-struct ServerContext<T> {
+/// Shared request handling and shutdown state for downstream transports.
+pub struct ServerContext<T> {
     handler: T,
     access: AccessControl,
     shutdown: CancellationToken,
 }
 
+impl<T> ServerContext<T> {
+    pub(crate) fn new(
+        handler: T,
+        denied_networks: impl IntoIterator<Item = IpNet>,
+        allowed_networks: impl IntoIterator<Item = IpNet>,
+    ) -> Self {
+        let mut access = AccessControl::default();
+        access.insert_deny(denied_networks);
+        access.insert_allow(allowed_networks);
+
+        Self {
+            handler,
+            access,
+            shutdown: CancellationToken::new(),
+        }
+    }
+
+    /// Returns a reference to the [`CancellationToken`] used to gracefully shut down the server.
+    pub fn shutdown_token(&self) -> &CancellationToken {
+        &self.shutdown
+    }
+}
+
 impl<T: RequestHandler> ServerContext<T> {
-    async fn handle_raw_request(
+    pub(crate) async fn handle_raw_request(
         &self,
         message: SerialMessage,
         protocol: Protocol,
@@ -742,7 +775,10 @@ impl<T: RequestHandler> ServerContext<T> {
             .await;
     }
 
-    async fn handle_request(
+    /// Applies the shared DNS decoding, access control, and response reporting policy.
+    ///
+    /// The transport must validate that the source address is safe for responses.
+    pub async fn handle_request(
         &self,
         message_bytes: Bytes,
         src_addr: SocketAddr,
@@ -935,10 +971,10 @@ async fn error_response_handler(
     }
 }
 
-pub(super) struct ReportingResponseHandler<R: ResponseHandler> {
-    pub(super) request_meta: Metadata,
+pub(crate) struct ReportingResponseHandler<R: ResponseHandler> {
+    pub(crate) request_meta: Metadata,
     query: Option<LowerQuery>,
-    pub(super) protocol: Protocol,
+    pub(crate) protocol: Protocol,
     src_addr: SocketAddr,
     handler: R,
     #[cfg(feature = "metrics")]
@@ -1070,17 +1106,19 @@ async fn optional_timeout<T>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::zone_handler::Catalog;
+    use std::net::SocketAddr;
+
     use futures_util::future;
     #[cfg(feature = "__tls")]
     use rustls::sign::SingleCertAndKey;
-    use std::net::SocketAddr;
     #[cfg(feature = "__tls")]
     use test_support::TestCertificates;
     use test_support::subscribe;
     use tokio::net::{TcpListener, UdpSocket};
     use tokio::time::timeout;
+
+    use super::*;
+    use crate::zone_handler::Catalog;
 
     #[tokio::test]
     async fn abort() {

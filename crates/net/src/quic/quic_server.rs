@@ -54,7 +54,7 @@ impl QuicServer {
         Self::with_socket_and_tls_config(socket, Arc::new(config))
     }
 
-    /// Construct the new server with an existing socket and a custom TLS configuration
+    /// Constructs a listener with an existing socket and a custom TLS configuration.
     ///
     /// The caller must ensure the `TlsServerConfig` has the appropriate DoQ ALPN protocol enabled.
     pub fn with_socket_and_tls_config(
@@ -83,7 +83,7 @@ impl QuicServer {
         self.endpoint.accept().await
     }
 
-    /// Returns the address this server is listening on
+    /// Returns the address this listener is listening on.
     ///
     /// This can be useful in tests, where a random port can be associated with the server by binding on `127.0.0.1:0` and then getting the
     ///   associated port address with this function.

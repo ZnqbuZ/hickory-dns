@@ -114,7 +114,6 @@ impl H3Connection {
             connection: h3_connection,
         })
     }
-
     /// Accept the next request from the client
     pub async fn accept(
         &mut self,

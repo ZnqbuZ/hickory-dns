@@ -143,7 +143,7 @@ pub(crate) async fn quic_handler(
             break; // Timeout elapsed while waiting for a request.
         };
         let Some(result) = stream_option else {
-            break;
+            break; // Timeout elapsed while waiting for a request.
         };
         let mut request_stream = match result {
             Ok(next_request) => next_request,
