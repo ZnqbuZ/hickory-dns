@@ -46,6 +46,7 @@ mod response_handler;
 pub use response_handler::{ResponseHandle, ResponseHandler};
 mod timeout_stream;
 pub use timeout_stream::TimeoutStream;
+mod utils;
 
 /// A Futures-based implementation of a DNS server.
 pub struct Server<T: RequestHandler> {
@@ -713,5 +714,3 @@ mod tests {
         );
     }
 }
-
-mod utils;

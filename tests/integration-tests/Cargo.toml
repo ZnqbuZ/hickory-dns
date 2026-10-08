@@ -89,8 +89,8 @@ h3-ring = [
 
 __tls = ["dep:rustls"]
 __https = ["dep:rustls", "dep:webpki-roots"]
-__h3 = []
 __quic = []
+__h3 = []
 
 sqlite = ["rusqlite", "hickory-server/sqlite"]
 metrics = ["hickory-server/metrics"]

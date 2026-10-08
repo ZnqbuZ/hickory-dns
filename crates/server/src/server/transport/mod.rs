@@ -36,6 +36,17 @@ pub trait Transport: Send + 'static {
     ) -> Result<impl Future<Output = Result<(), NetError>> + Send + 'static, NetError>;
 }
 
+#[cfg(feature = "__https")]
+mod h2_handler;
+#[cfg(feature = "__h3")]
+mod h3_handler;
+#[cfg(feature = "__quic")]
+mod quic_handler;
+mod tcp_transport;
+#[cfg(feature = "__tls")]
+mod tls_transport;
+mod udp_transport;
+
 pub use self::udp_transport::Udp;
 
 pub use self::tcp_transport::Tcp;
@@ -51,14 +62,3 @@ pub use self::quic_handler::Quic;
 
 #[cfg(feature = "__h3")]
 pub use self::h3_handler::H3;
-
-#[cfg(feature = "__https")]
-mod h2_handler;
-#[cfg(feature = "__h3")]
-mod h3_handler;
-#[cfg(feature = "__quic")]
-mod quic_handler;
-mod tcp_transport;
-#[cfg(feature = "__tls")]
-mod tls_transport;
-mod udp_transport;
