@@ -173,7 +173,7 @@ impl<L: DnsTcpListener> Transport for Https<L> {
                 let dns_hostname = dns_hostname.clone();
                 let http_endpoint = http_endpoint.clone();
                 inner_join_set.spawn(async move {
-                    inner_h2_handler(
+                    h2_handler(
                         accepted,
                         self.idle_timeout,
                         self.request_timeout,
@@ -196,7 +196,7 @@ impl<L: DnsTcpListener> Transport for Https<L> {
     }
 }
 
-async fn inner_h2_handler(
+async fn h2_handler(
     mut accepted: Accepted<h2::HttpsConnection<impl DnsTcpStream>>,
     idle_timeout: Option<Duration>,
     request_timeout: Option<Duration>,

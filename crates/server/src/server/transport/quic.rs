@@ -1,19 +1,17 @@
-// Copyright 2015-2021 Benjamin Fry <benjaminfry@me.com>
+// Copyright 2015-2022 Benjamin Fry <benjaminfry@me.com>
 //
 // Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
 // https://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use std::{future::Future, sync::Arc, task::Context, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use super::Transport;
 use crate::{
     net::{
         NetError,
-        h3::{BodyStream, H3Connection, H3Listener},
-        http::{self, Version, fetch_body},
-        quic::IntoQuicSocket,
+        quic::{IntoQuicSocket, QuicConnection, QuicListener, QuicStream},
         runtime::Accepted,
         tls::{alpn, tls_config},
         xfer::Protocol,
@@ -27,17 +25,15 @@ use crate::{
     },
     zone_handler::MessageResponse,
 };
-use bytes::{Buf, Bytes};
-use h3::server::RequestStream;
-use h3_quinn::BidiStream;
+use bytes::Bytes;
 use rustls::{ServerConfig, server::ResolvesServerCert};
 use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
-/// Builder and transport implementation for DNS-over-HTTP/3 (DoH3).
+/// Builder and transport implementation for DNS-over-QUIC (DoQ).
 ///
-/// Wraps an already-bound UDP socket and a TLS configuration to accept HTTP/3 connections.
-pub struct H3<S> {
+/// Wraps an already-bound UDP socket and a TLS configuration to accept QUIC connections.
+pub struct Quic<S> {
     socket: S,
     tls_config: Arc<ServerConfig>,
     handshake_timeout: Option<Duration>,
@@ -45,30 +41,33 @@ pub struct H3<S> {
     request_timeout: Option<Duration>,
 }
 
-impl<S> H3<S> {
-    /// Constructs a new HTTP/3 transport with the provided [`ServerConfig`].
+impl<S> Quic<S> {
+    /// Constructs a new QUIC transport with the provided [`ServerConfig`].
     ///
     /// The `socket` must be already bound to the desired local address, and the configuration
-    /// must enable the H3 ALPN protocol. Default timeouts are `None`.
-    pub fn new(socket: S, tls_config: Arc<ServerConfig>) -> Self {
+    /// must enable the DoQ ALPN protocol. Default timeouts are `None`.
+    pub fn new(socket: S, tls_config: impl Into<Arc<ServerConfig>>) -> Self {
         Self {
             socket,
-            tls_config,
+            tls_config: tls_config.into(),
             handshake_timeout: None,
             idle_timeout: None,
             request_timeout: None,
         }
     }
 
-    /// Constructs a new HTTP/3 transport with a certificate resolver.
+    /// Constructs a new QUIC transport with a certificate resolver.
     ///
-    /// A default TLS 1.3 configuration with ALPN `h3` is constructed immediately.
-    pub fn from_cert_resolver(socket: S, cert_resolver: Arc<dyn ResolvesServerCert>) -> Self {
-        let config = tls_config::default_quic_server_config(alpn::ALPN_H3, cert_resolver);
-        Self::new(socket, config.into())
+    /// A default TLS 1.3 configuration with ALPN `doq` is constructed immediately.
+    pub fn from_cert_resolver(
+        socket: S,
+        server_cert_resolver: Arc<dyn ResolvesServerCert>,
+    ) -> Self {
+        let config = tls_config::default_quic_server_config(alpn::DOQ_ALPN, server_cert_resolver);
+        Self::new(socket, config)
     }
 
-    /// Sets the timeout for the QUIC handshake and HTTP/3 initialization together.
+    /// Sets the timeout duration for performing QUIC handshakes.
     pub fn handshake_timeout(self, handshake_timeout: Duration) -> Self {
         self.maybe_handshake_timeout(Some(handshake_timeout))
     }
@@ -81,7 +80,7 @@ impl<S> H3<S> {
         }
     }
 
-    /// Sets the timeout before closing an idle connection.
+    /// Sets the timeout before closing an idle QUIC connection.
     pub fn idle_timeout(self, idle_timeout: Duration) -> Self {
         self.maybe_idle_timeout(Some(idle_timeout))
     }
@@ -108,7 +107,7 @@ impl<S> H3<S> {
     }
 }
 
-impl<S> Transport for H3<S>
+impl<S> Transport for Quic<S>
 where
     S: IntoQuicSocket + Send + 'static,
 {
@@ -116,7 +115,7 @@ where
         self,
         cx: Arc<ServerContext<H>>,
     ) -> Result<impl Future<Output = Result<(), NetError>> + Send + 'static, NetError> {
-        let mut listener = H3Listener::with_socket_and_tls_config(self.socket, self.tls_config)?;
+        let mut listener = QuicListener::with_socket_and_tls_config(self.socket, self.tls_config)?;
 
         Ok(async move {
             let mut inner_join_set = JoinSet::new();
@@ -133,7 +132,7 @@ where
                 let connection = match connection_result {
                     Ok(connection) => connection,
                     Err(error) => {
-                        debug!(%error, "error accepting incoming h3 connection");
+                        debug!(%error, "error accepting incoming quic connection");
                         continue;
                     }
                 };
@@ -141,14 +140,13 @@ where
                 let cx = cx.clone();
                 inner_join_set.spawn(async move {
                     let src_addr = connection.src_addr;
-                    debug!("starting h3 stream request from: {src_addr}");
+                    debug!("starting quic stream request from: {src_addr}");
 
                     let result =
-                        inner_h3_handler(connection, self.idle_timeout, self.request_timeout, cx)
-                            .await;
+                        quic_handler(connection, self.idle_timeout, self.request_timeout, cx).await;
 
                     if let Err(error) = result {
-                        warn!(%error, %src_addr, "h3 stream processing failed")
+                        warn!(%error, %src_addr, "quic stream processing failed")
                     }
                 });
 
@@ -160,8 +158,8 @@ where
     }
 }
 
-async fn inner_h3_handler(
-    mut accepted: Accepted<H3Connection>,
+async fn quic_handler(
+    mut accepted: Accepted<QuicConnection>,
     idle_timeout: Option<Duration>,
     request_timeout: Option<Duration>,
     cx: Arc<ServerContext<impl RequestHandler>>,
@@ -170,7 +168,7 @@ async fn inner_h3_handler(
     // TODO: we should make this configurable
     let mut max_requests = 100u32;
 
-    // Accept all inbound requests sent over the connection.
+    // Accept all inbound quic streams sent over the connection.
     loop {
         let future = cx
             .shutdown_token()
@@ -181,61 +179,49 @@ async fn inner_h3_handler(
         let Some(timeout_result) = future.await else {
             break; // A graceful shutdown was initiated.
         };
-        let Ok(accept_result) = timeout_result else {
+        let Ok(result) = timeout_result else {
             break; // Timeout elapsed while waiting for a request.
         };
-        let request_resolver_opt = match accept_result {
-            Ok(request_resolver_opt) => request_resolver_opt,
-            Err(error) => {
-                warn!(%src_addr, %error, "error accepting request");
-                return Err(error);
+        let mut request_stream = match result {
+            Ok(next_request) => next_request,
+            Err(err) => {
+                warn!("error accepting request {}: {}", src_addr, err);
+                return Err(err);
             }
-        };
-        let Some(request_resolver) = request_resolver_opt else {
-            break; // The connection is closed.
         };
 
         let cx = cx.clone();
         tokio::spawn(async move {
-            let mut stream = match request_resolver.resolve_request().await {
-                Ok((_request, stream)) => stream,
-                Err(error) => {
-                    warn!(%error, "error receiving request headers");
-                    return;
-                }
-            };
-
-            let fetch_future = fetch_body(
-                BodyStream::from(|cx: &mut Context<'_>| stream.poll_recv_data(cx)),
-                None,
-            );
-            let Ok(request_res) = utils::optional_timeout(request_timeout, fetch_future).await
+            let Ok(request_res) =
+                utils::optional_timeout(request_timeout, request_stream.receive_bytes()).await
             else {
-                return; //Timeout while reading request.
+                return; // Timeout while reading body.
             };
             let request = match request_res {
                 Ok(bytes_mut) => bytes_mut.freeze(),
                 Err(error) => {
-                    warn!(%error, "error receiving request body");
+                    warn!(%error, %src_addr, "reading quic request failed");
                     return;
                 }
             };
 
             debug!(
-                %src_addr,
-                bytes = request.remaining(),
-                ?request,
-                "Received request body"
+                "Received bytes {} from {src_addr} {request:?}",
+                request.len()
             );
 
-            cx.handle_request(request, src_addr, Protocol::H3, H3ResponseHandle(stream))
-                .await
+            cx.handle_request(
+                request,
+                src_addr,
+                Protocol::Quic,
+                QuicResponseHandle(request_stream),
+            )
+            .await;
         });
 
         max_requests -= 1;
         if max_requests == 0 {
-            warn!("exceeded request count, shutting down h3 conn: {src_addr}");
-            accepted.connection.shutdown().await?;
+            warn!("exceeded request count, shutting down quic conn: {src_addr}");
             break;
         }
         // we'll continue handling requests from here.
@@ -244,13 +230,13 @@ async fn inner_h3_handler(
     Ok(())
 }
 
-struct H3ResponseHandle(RequestStream<BidiStream<Bytes>, Bytes>);
+struct QuicResponseHandle(QuicStream);
 
 #[async_trait::async_trait]
-impl ResponseHandler for H3ResponseHandle {
+impl ResponseHandler for QuicResponseHandle {
     async fn send_response<'a>(
         &mut self,
-        response: MessageResponse<
+        mut response: MessageResponse<
             '_,
             'a,
             impl Iterator<Item = &'a Record> + Send + 'a,
@@ -259,14 +245,14 @@ impl ResponseHandler for H3ResponseHandle {
             impl Iterator<Item = &'a Record> + Send + 'a,
         >,
     ) -> Result<ResponseInfo, NetError> {
-        let (info, bytes) = response.encode(Protocol::H3)?;
+        // The id should always be 0 in DoQ
+        response.metadata_mut().id = 0;
+        let (info, bytes) = response.encode(Protocol::Quic)?;
         let bytes = Bytes::from(bytes);
-        let response = http::response(Version::Http3, bytes.len())?;
 
-        debug!("sending response: {:#?}", response);
+        debug!("sending quic response: {}", bytes.len());
         let stream = &mut self.0;
-        stream.send_response(response).await?;
-        stream.send_data(bytes).await?;
+        stream.send_bytes(bytes).await?;
         stream.finish().await?;
 
         Ok(info)
