@@ -59,8 +59,12 @@ impl H3Server {
         socket: impl IntoQuicSocket,
         tls_config: Arc<TlsServerConfig>,
     ) -> Result<Self, NetError> {
-        let endpoint =
-            QuicEndpoint::new(socket, tls_config, super::endpoint(), super::transport())?;
+        let endpoint = QuicEndpoint::new(
+            socket,
+            tls_config,
+            super::h3_config::endpoint(),
+            super::h3_config::transport(),
+        )?;
 
         Ok(Self { endpoint })
     }
