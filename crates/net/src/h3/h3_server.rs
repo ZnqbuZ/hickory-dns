@@ -17,7 +17,7 @@ use crate::{
     error::NetError,
     quic::{
         IntoQuicSocket,
-        quic_server::endpoint::{QuicEndpoint, QuicHandshake},
+        quic_endpoint::{QuicEndpoint, QuicHandshake},
     },
     runtime::Accepted,
 };

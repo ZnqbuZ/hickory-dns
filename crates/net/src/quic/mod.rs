@@ -14,6 +14,7 @@ use quinn::Runtime;
 
 mod quic_client_stream;
 mod quic_config;
+pub(crate) mod quic_endpoint;
 pub(crate) mod quic_server;
 mod quic_stream;
 
