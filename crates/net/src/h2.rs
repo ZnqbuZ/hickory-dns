@@ -297,17 +297,29 @@ const ALPN_H2: &[u8] = b"h2";
 
 #[cfg(test)]
 mod tests {
-    use core::net::SocketAddr;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
+    use std::sync::Arc;
 
-    use rustls::KeyLogFile;
+    use bytes::Bytes;
+    use futures_util::stream::Stream;
     use test_support::subscribe;
 
     use super::*;
-    use crate::proto::op::{DnsRequestOptions, Edns, Message, Query};
-    use crate::proto::rr::{Name, RData, RecordType};
-    use crate::runtime::TokioRuntimeProvider;
-    use crate::tls::client_config;
-    use crate::xfer::FirstAnswer;
+    use crate::http::{RequestContext, Version};
+    use crate::proto::op::Message;
+
+    #[cfg(any(feature = "webpki-roots", feature = "rustls-platform-verifier"))]
+    use {
+        crate::proto::op::{DnsRequest, DnsRequestOptions, Edns, Query},
+        crate::proto::rr::{Name, RData, RecordType},
+        crate::runtime::TokioRuntimeProvider,
+        crate::tls::client_config,
+        crate::xfer::{DnsRequestSender, FirstAnswer},
+        core::net::SocketAddr,
+        core::str::FromStr,
+        rustls::{ClientConfig, KeyLogFile},
+    };
 
     #[cfg(any(feature = "webpki-roots", feature = "rustls-platform-verifier"))]
     #[tokio::test]
@@ -523,6 +535,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(feature = "webpki-roots", feature = "rustls-platform-verifier"))]
     fn client_config_h2() -> ClientConfig {
         let mut config = client_config().unwrap();
         config.alpn_protocols = vec![ALPN_H2.to_vec()];
