@@ -172,10 +172,7 @@ async fn quic_handler(
     loop {
         let future = cx
             .shutdown_token()
-            .run_until_cancelled(utils::optional_timeout(
-                idle_timeout,
-                accepted.connection.accept(),
-            ));
+            .run_until_cancelled(utils::timeout(idle_timeout, accepted.connection.accept()));
         let Some(timeout_result) = future.await else {
             break; // A graceful shutdown was initiated.
         };
@@ -193,7 +190,7 @@ async fn quic_handler(
         let cx = cx.clone();
         tokio::spawn(async move {
             let Ok(request_res) =
-                utils::optional_timeout(request_timeout, request_stream.receive_bytes()).await
+                utils::timeout(request_timeout, request_stream.receive_bytes()).await
             else {
                 return; // Timeout while reading body.
             };

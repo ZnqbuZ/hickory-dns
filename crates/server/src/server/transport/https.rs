@@ -213,10 +213,7 @@ async fn h2_handler(
     loop {
         let future = cx
             .shutdown_token()
-            .run_until_cancelled(utils::optional_timeout(
-                idle_timeout,
-                accepted.connection.accept(),
-            ));
+            .run_until_cancelled(utils::timeout(idle_timeout, accepted.connection.accept()));
         let Some(timeout_result) = future.await else {
             break; // A graceful shutdown was initiated.
         };
@@ -240,7 +237,7 @@ async fn h2_handler(
         let http_endpoint = http_endpoint.clone();
         tokio::spawn(async move {
             let message_future = h2::message_from(dns_hostname, http_endpoint, request);
-            let Ok(result) = utils::optional_timeout(request_timeout, message_future).await else {
+            let Ok(result) = utils::timeout(request_timeout, message_future).await else {
                 return; // Timeout while reading request.
             };
             let body = match result {

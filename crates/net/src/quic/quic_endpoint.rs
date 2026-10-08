@@ -7,7 +7,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
 use super::IntoQuicSocket;
-use crate::{error::NetError, runtime::Accepted, utils, utils::sanitize_src_address};
+use crate::{error::NetError, runtime::Accepted, utils, utils::sanitize_src_addr};
 
 /// QUIC and HTTP/3 share acceptance and task ownership but initialize different protocols.
 pub(crate) trait QuicHandshake: Sized + Send + 'static {
@@ -60,7 +60,7 @@ impl<H: QuicHandshake> QuicEndpoint<H> {
         let src_addr = connecting.remote_address();
         debug!(%src_addr, "starting QUIC request");
 
-        let connection = utils::optional_timeout(timeout, H::handshake(connecting))
+        let connection = utils::timeout(timeout, H::handshake(connecting))
             .await
             .inspect_err(|_| warn!("timeout expired during handshake"))
             .ok()?
@@ -90,7 +90,7 @@ impl<H: QuicHandshake> QuicEndpoint<H> {
                         }
                         continue;
                     }
-                    if let Err(error) = sanitize_src_address(src_addr) {
+                    if let Err(error) = sanitize_src_addr(src_addr) {
                         warn!(%error, %src_addr, "address can not be responded to");
                         continue;
                     }

@@ -173,10 +173,7 @@ async fn h3_handler(
     loop {
         let future = cx
             .shutdown_token()
-            .run_until_cancelled(utils::optional_timeout(
-                idle_timeout,
-                accepted.connection.accept(),
-            ));
+            .run_until_cancelled(utils::timeout(idle_timeout, accepted.connection.accept()));
         let Some(timeout_result) = future.await else {
             break; // A graceful shutdown was initiated.
         };
@@ -208,8 +205,7 @@ async fn h3_handler(
                 BodyStream::from(|cx: &mut Context<'_>| stream.poll_recv_data(cx)),
                 None,
             );
-            let Ok(request_res) = utils::optional_timeout(request_timeout, fetch_future).await
-            else {
+            let Ok(request_res) = utils::timeout(request_timeout, fetch_future).await else {
                 return; //Timeout while reading request.
             };
             let request = match request_res {

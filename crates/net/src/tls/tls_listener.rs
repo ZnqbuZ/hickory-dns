@@ -54,7 +54,7 @@ impl<L: DnsTcpListener> TlsListener<L> {
         let src_addr = accepted.src_addr;
         debug!(%src_addr, "starting TLS request");
 
-        let tls_stream = utils::optional_timeout(
+        let tls_stream = utils::timeout(
             timeout,
             tls_acceptor.accept(AsyncIoStdAsTokio(accepted.connection)),
         )

@@ -67,7 +67,7 @@ impl<L: DnsTcpListener> HttpsListener<L> {
         let src_addr = accepted.src_addr;
         debug!("starting HTTPS request from: {src_addr}");
 
-        let tls_stream = utils::optional_timeout(
+        let tls_stream = utils::timeout(
             timeout,
             tls_acceptor.accept(AsyncIoStdAsTokio(accepted.connection)),
         )
