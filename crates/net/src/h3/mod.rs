@@ -22,8 +22,6 @@ pub use h3_client_stream::{H3ClientStream, H3ClientStreamBuilder};
 mod h3_config;
 pub mod h3_server;
 
-const ALPN_H3: &[u8] = b"h3";
-
 /// [`Stream`] adapter for h3 body streaming.
 pub struct BodyStream<T>(T);
 

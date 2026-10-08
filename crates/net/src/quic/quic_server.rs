@@ -38,7 +38,7 @@ impl QuicServer {
         socket: impl IntoQuicSocket,
         cert_resolver: Arc<dyn ResolvesServerCert>,
     ) -> Result<Self, NetError> {
-        let config = tls_config::default_quic_server_config(b"doq", cert_resolver);
+        let config = tls_config::default_quic_server_config(alpn::DOQ_ALPN, cert_resolver);
         Self::with_socket_and_tls_config(socket, Arc::new(config))
     }
 
@@ -107,3 +107,5 @@ impl QuicHandshake for QuicStreams {
         })
     }
 }
+
+use crate::tls::alpn;

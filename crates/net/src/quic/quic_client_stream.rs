@@ -32,7 +32,8 @@ use crate::{
     xfer::{CONNECT_TIMEOUT, DnsExchange, DnsRequestSender, DnsResponseStream},
 };
 
-use super::{quic_config, quic_stream};
+use super::quic_config;
+use crate::tls::alpn;
 
 /// A DNS client connection for DNS-over-QUIC
 #[must_use = "futures do nothing unless polled"]
@@ -319,7 +320,7 @@ impl QuicClientStreamBuilder {
             connect_quic(
                 name_server,
                 server_name.clone(),
-                quic_stream::DOQ_ALPN,
+                alpn::DOQ_ALPN,
                 crypto_config,
                 self.transport_config,
                 endpoint,

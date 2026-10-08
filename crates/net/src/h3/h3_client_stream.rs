@@ -24,14 +24,14 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::{debug, warn};
 
-use super::{ALPN_H3, BodyStream, h3_config};
+use super::{BodyStream, h3_config};
 use crate::error::NetError;
 use crate::http::{HttpSender, RequestContext, SetHeaders, Version, content_length, fetch_body};
 use crate::proto::ProtoError;
 use crate::proto::op::DnsRequest;
 use crate::quic::connect_quic;
 use crate::runtime::{RuntimeProvider, Spawn};
-use crate::tls::client_config;
+use crate::tls::{alpn::ALPN_H3, client_config};
 use crate::udp::UdpSocket;
 use crate::xfer::{CONNECT_TIMEOUT, DnsExchange, DnsRequestSender, DnsResponseStream};
 

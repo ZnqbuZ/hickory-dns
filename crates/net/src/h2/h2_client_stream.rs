@@ -249,4 +249,4 @@ impl HttpSender for HttpsClientStream {
     }
 }
 
-use super::ALPN_H2;
+use crate::tls::alpn::ALPN_H2;

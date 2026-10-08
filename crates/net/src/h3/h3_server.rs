@@ -48,7 +48,7 @@ impl H3Server {
         socket: impl IntoQuicSocket,
         cert_resolver: Arc<dyn ResolvesServerCert>,
     ) -> Result<Self, NetError> {
-        let config = tls_config::default_quic_server_config(b"h3", cert_resolver);
+        let config = tls_config::default_quic_server_config(alpn::ALPN_H3, cert_resolver);
         Self::with_socket_and_tls_config(socket, Arc::new(config))
     }
 
@@ -126,3 +126,5 @@ impl QuicHandshake for H3Connection {
         Ok(Self { connection })
     }
 }
+
+use crate::tls::alpn;

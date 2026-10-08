@@ -1,3 +1,5 @@
+#[cfg(feature = "__tls")]
+use hickory_net::tls::alpn;
 #[cfg(any(feature = "__tls", feature = "__https", feature = "__quic"))]
 use std::sync::Arc;
 use std::time::Duration;
@@ -649,7 +651,7 @@ impl ServerSetup<'_> {
             );
 
             let mut tls_config =
-                tls_config::default_tls_server_config(b"dot", cert_resolver.clone())
+                tls_config::default_tls_server_config(alpn::DOT_ALPN, cert_resolver.clone())
                     .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
                 warn!("DoT SSL_KEYLOG_FILE support enabled");
@@ -692,7 +694,7 @@ impl ServerSetup<'_> {
             );
 
             let mut tls_config =
-                tls_config::default_tls_server_config(b"h2", cert_resolver.clone())
+                tls_config::default_tls_server_config(alpn::ALPN_H2, cert_resolver.clone())
                     .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
                 warn!("DoH SSL_KEYLOG_FILE support enabled");
@@ -734,7 +736,7 @@ impl ServerSetup<'_> {
             );
 
             let mut tls_config =
-                tls_config::default_tls_server_config(b"doq", cert_resolver.clone())
+                tls_config::default_tls_server_config(alpn::DOQ_ALPN, cert_resolver.clone())
                     .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
                 warn!("DoQ SSL_KEYLOG_FILE support enabled");

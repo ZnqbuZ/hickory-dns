@@ -64,7 +64,7 @@ impl<S> Quic<S> {
         socket: S,
         server_cert_resolver: Arc<dyn ResolvesServerCert>,
     ) -> Self {
-        let config = tls_config::default_quic_server_config(b"doq", server_cert_resolver);
+        let config = tls_config::default_quic_server_config(alpn::DOQ_ALPN, server_cert_resolver);
         Self::new(socket, config)
     }
 
@@ -260,3 +260,5 @@ impl ResponseHandler for QuicResponseHandle {
         Ok(info)
     }
 }
+
+use crate::net::tls::alpn;

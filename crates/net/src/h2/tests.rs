@@ -22,7 +22,7 @@ use {
     crate::proto::op::{DnsRequest, DnsRequestOptions, Edns, Query},
     crate::proto::rr::{Name, RData, RecordType},
     crate::runtime::TokioRuntimeProvider,
-    crate::tls::client_config,
+    crate::tls::{alpn::ALPN_H2, client_config},
     crate::xfer::{DnsRequestSender, FirstAnswer},
     core::net::SocketAddr,
     core::str::FromStr,

@@ -12,3 +12,12 @@ pub use tls_client_stream::{
 pub use tls_config::default_quic_server_config;
 pub use tls_config::{client_config, default_provider, default_tls_server_config};
 pub use tls_listener::{TlsListener, TlsServerStream};
+
+/// TLS protocol IDs used by the DNS transport configuration factories.
+#[allow(missing_docs)]
+pub mod alpn {
+    pub const ALPN_H2: &[u8] = b"h2";
+    pub const ALPN_H3: &[u8] = b"h3";
+    pub const DOT_ALPN: &[u8] = b"dot";
+    pub const DOQ_ALPN: &[u8] = b"doq";
+}
