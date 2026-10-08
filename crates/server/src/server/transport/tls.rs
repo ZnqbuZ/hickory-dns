@@ -63,7 +63,7 @@ impl<L> Tls<L> {
         listener: L,
         server_cert_resolver: Arc<dyn ResolvesServerCert>,
     ) -> Result<Self, NetError> {
-        let config = tls_config::default_tls_server_config(alpn::DOT_ALPN, server_cert_resolver)?;
+        let config = tls_config::server_tcp(alpn::DOT, server_cert_resolver)?;
         Ok(Self::new(listener, config))
     }
 

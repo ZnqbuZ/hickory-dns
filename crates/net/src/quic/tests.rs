@@ -21,7 +21,7 @@ use crate::{
         rr::{Name, RecordType},
     },
     quic::QuicClientStreamBuilder,
-    tls as tls_config,
+    tls::tls_config,
     xfer::DnsRequestSender,
 };
 
@@ -75,12 +75,11 @@ async fn test_quic_stream() {
     let (_, ignored) = roots.add_parsable_certificates([certificates.ca.der().clone()]);
     assert_eq!(ignored, 0);
 
-    let mut client_config =
-        ClientConfig::builder_with_provider(Arc::new(tls_config::default_provider()))
-            .with_safe_default_protocol_versions()
-            .unwrap()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+    let mut client_config = ClientConfig::builder_with_provider(Arc::new(tls_config::provider()))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
 
     client_config.key_log = Arc::new(KeyLogFile::new());
 

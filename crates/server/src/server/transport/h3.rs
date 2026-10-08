@@ -64,7 +64,7 @@ impl<S> H3<S> {
     ///
     /// A default TLS 1.3 configuration with ALPN `h3` is constructed immediately.
     pub fn from_cert_resolver(socket: S, cert_resolver: Arc<dyn ResolvesServerCert>) -> Self {
-        let config = tls_config::default_quic_server_config(alpn::ALPN_H3, cert_resolver);
+        let config = tls_config::server_quic(alpn::H3, cert_resolver);
         Self::new(socket, config.into())
     }
 

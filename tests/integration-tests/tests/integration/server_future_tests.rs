@@ -25,7 +25,7 @@ use hickory_net::client::{Client, ClientHandle};
 use hickory_net::runtime::TokioRuntimeProvider;
 use hickory_net::tcp::TcpClientStream;
 #[cfg(feature = "__tls")]
-use hickory_net::tls::{default_provider, tls_client_connect_with_bind_addr};
+use hickory_net::tls::{tls_client_connect_with_bind_addr, tls_config};
 use hickory_net::udp::UdpClientStream;
 use hickory_net::xfer::{DnsHandle, DnsMultiplexer};
 use hickory_proto::op::{DnsRequest, Message, OpCode, Query, ResponseCode};
@@ -297,7 +297,7 @@ async fn test_server_www_quic() {
     let (_, ignored) = roots.add_parsable_certificates([certificates.ca.der().clone()]);
     assert_eq!(ignored, 0);
 
-    let client_config = ClientConfig::builder_with_provider(Arc::new(default_provider()))
+    let client_config = ClientConfig::builder_with_provider(Arc::new(tls_config::provider()))
         .with_safe_default_protocol_versions()
         .unwrap()
         .with_root_certificates(roots)
@@ -355,7 +355,7 @@ async fn test_server_www_h3() {
     let (_, ignored) = roots.add_parsable_certificates([certificates.ca.der().clone()]);
     assert_eq!(ignored, 0);
 
-    let client_config = ClientConfig::builder_with_provider(Arc::new(default_provider()))
+    let client_config = ClientConfig::builder_with_provider(Arc::new(tls_config::provider()))
         .with_safe_default_protocol_versions()
         .unwrap()
         .with_root_certificates(roots)
@@ -415,7 +415,7 @@ async fn lazy_tls_client(
     let (_, ignored) = root_store.add_parsable_certificates(cert_chain);
     assert_eq!(ignored, 0, "bad certificate!");
 
-    let config = ClientConfig::builder_with_provider(Arc::new(default_provider()))
+    let config = ClientConfig::builder_with_provider(Arc::new(tls_config::provider()))
         .with_safe_default_protocol_versions()
         .unwrap()
         .with_root_certificates(root_store)

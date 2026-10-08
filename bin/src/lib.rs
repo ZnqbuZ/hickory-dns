@@ -649,9 +649,8 @@ impl ServerSetup<'_> {
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
 
-            let mut tls_config =
-                tls_config::default_tls_server_config(alpn::DOT_ALPN, cert_resolver.clone())
-                    .map_err(|err| format!("failed to build default TLS config: {err}"))?;
+            let mut tls_config = tls_config::server_tcp(alpn::DOT, cert_resolver.clone())
+                .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
                 warn!("DoT SSL_KEYLOG_FILE support enabled");
                 tls_config.key_log = Arc::new(KeyLogFile::new());
@@ -692,9 +691,8 @@ impl ServerSetup<'_> {
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
 
-            let mut tls_config =
-                tls_config::default_tls_server_config(alpn::ALPN_H2, cert_resolver.clone())
-                    .map_err(|err| format!("failed to build default TLS config: {err}"))?;
+            let mut tls_config = tls_config::server_tcp(alpn::H2, cert_resolver.clone())
+                .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
                 warn!("DoH SSL_KEYLOG_FILE support enabled");
                 tls_config.key_log = Arc::new(KeyLogFile::new());
@@ -734,9 +732,8 @@ impl ServerSetup<'_> {
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
 
-            let mut tls_config =
-                tls_config::default_tls_server_config(alpn::DOQ_ALPN, cert_resolver.clone())
-                    .map_err(|err| format!("failed to build default TLS config: {err}"))?;
+            let mut tls_config = tls_config::server_tcp(alpn::DOQ, cert_resolver.clone())
+                .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
                 warn!("DoQ SSL_KEYLOG_FILE support enabled");
                 tls_config.key_log = Arc::new(KeyLogFile::new());

@@ -172,7 +172,7 @@ pub fn connect(
     // ensure the ALPN protocol is set correctly
     if client_config.alpn_protocols.is_empty() {
         let mut client_cfg = (*client_config).clone();
-        client_cfg.alpn_protocols = vec![alpn::ALPN_H2.to_vec()];
+        client_cfg.alpn_protocols = vec![alpn::H2.to_vec()];
 
         client_config = Arc::new(client_cfg);
     }

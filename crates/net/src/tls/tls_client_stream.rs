@@ -173,13 +173,13 @@ fn tls_client_connect_with_future<S: DnsTcpStream>(
     )
 }
 
-pub(super) async fn connect_tls_stream<S: DnsTcpStream>(
+pub(crate) async fn connect_tls_stream<S: DnsTcpStream>(
     tls_connector: TlsConnector,
     stream: S,
     name_server: SocketAddr,
     server_name: ServerName<'static>,
     outbound_messages: StreamReceiver,
-) -> Result<TcpStream<AsyncIoTokioAsStd<TokioTlsClientStream<S>>>, NetError> {
+) -> Result<TcpStream<AsyncIoTokioAsStd<TlsStream<AsyncIoStdAsTokio<S>>>>, NetError> {
     let stream = AsyncIoStdAsTokio(stream);
     let s = match timeout(CONNECT_TIMEOUT, tls_connector.connect(server_name, stream)).await {
         Ok(Ok(s)) => s,
@@ -196,6 +196,3 @@ pub(super) async fn connect_tls_stream<S: DnsTcpStream>(
         outbound_messages,
     ))
 }
-
-/// Predefined type for abstracting the TlsClientStream with TokioTls
-pub type TokioTlsClientStream<S> = TlsStream<AsyncIoStdAsTokio<S>>;

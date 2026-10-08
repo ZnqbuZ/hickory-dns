@@ -34,9 +34,6 @@ use crate::{
 #[cfg(feature = "__tls")]
 pub use crate::net::tls::tls_config;
 
-#[cfg(feature = "__tls")]
-pub use crate::net::tls::tls_config::default_tls_server_config;
-
 pub mod transport;
 pub use transport::Transport;
 

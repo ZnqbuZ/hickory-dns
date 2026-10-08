@@ -65,7 +65,7 @@ impl QuicListener {
         socket: impl IntoQuicSocket,
         cert_resolver: Arc<dyn ResolvesServerCert>,
     ) -> Result<Self, NetError> {
-        let config = tls_config::default_quic_server_config(alpn::DOQ_ALPN, cert_resolver);
+        let config = tls_config::server_quic(alpn::DOQ, cert_resolver);
         Self::with_socket_and_tls_config(socket, Arc::new(config))
     }
 

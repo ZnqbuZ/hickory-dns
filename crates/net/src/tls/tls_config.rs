@@ -19,8 +19,8 @@ use rustls::{
 use rustls_platform_verifier::BuilderVerifierExt;
 
 /// Make a new [`ClientConfig`] with the default settings
-pub fn client_config() -> Result<ClientConfig, rustls::Error> {
-    let builder = ClientConfig::builder_with_provider(Arc::new(default_provider()))
+pub fn client() -> Result<ClientConfig, rustls::Error> {
+    let builder = ClientConfig::builder_with_provider(Arc::new(provider()))
         .with_safe_default_protocol_versions()
         .unwrap();
 
@@ -41,12 +41,12 @@ pub fn client_config() -> Result<ClientConfig, rustls::Error> {
 ///
 /// The returned configuration uses the safe default protocol versions and does not request client
 /// certificates. `alpn` selects the ALPN, such as `b"dot"` or `b"h2"`.
-/// QUIC needs a TLS 1.3 configuration; use `default_quic_server_config` for those protocols.
-pub fn default_tls_server_config(
+/// QUIC needs a TLS 1.3 configuration; use `server_quic` for those protocols.
+pub fn server_tcp(
     alpn: &[u8],
     cert_resolver: Arc<dyn ResolvesServerCert>,
 ) -> io::Result<ServerConfig> {
-    let mut config = ServerConfig::builder_with_provider(Arc::new(default_provider()))
+    let mut config = ServerConfig::builder_with_provider(Arc::new(provider()))
         .with_safe_default_protocol_versions()
         .map_err(|e| io::Error::other(format!("error creating TLS acceptor: {e}")))?
         .with_no_client_auth()
@@ -61,11 +61,8 @@ pub fn default_tls_server_config(
 /// protocol and does not request client certificates. `alpn` selects the ALPN, such as
 /// `b"doq"` or `b"h3"`.
 #[cfg(feature = "__quic")]
-pub fn default_quic_server_config(
-    alpn: &[u8],
-    cert_resolver: Arc<dyn ResolvesServerCert>,
-) -> ServerConfig {
-    let mut config = ServerConfig::builder_with_provider(Arc::new(default_provider()))
+pub fn server_quic(alpn: &[u8], cert_resolver: Arc<dyn ResolvesServerCert>) -> ServerConfig {
+    let mut config = ServerConfig::builder_with_provider(Arc::new(provider()))
         .with_protocol_versions(&[&rustls::version::TLS13])
         .expect("TLS1.3 not supported") // The ring default provider is guaranteed to support TLS 1.3
         .with_no_client_auth()
@@ -77,12 +74,12 @@ pub fn default_quic_server_config(
 
 /// Instantiate a new [`CryptoProvider`] for use with rustls
 #[cfg(all(feature = "tls-aws-lc-rs", not(feature = "tls-ring")))]
-pub fn default_provider() -> CryptoProvider {
+pub fn provider() -> CryptoProvider {
     crypto::aws_lc_rs::default_provider()
 }
 
 /// Instantiate a new [`CryptoProvider`] for use with rustls
 #[cfg(feature = "tls-ring")]
-pub fn default_provider() -> CryptoProvider {
+pub fn provider() -> CryptoProvider {
     crypto::ring::default_provider()
 }

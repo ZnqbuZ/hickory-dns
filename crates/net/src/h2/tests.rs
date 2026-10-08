@@ -245,8 +245,8 @@ async fn test_https_cloudflare() {
 
 #[cfg(any(feature = "webpki-roots", feature = "rustls-platform-verifier"))]
 fn client_config_h2() -> ClientConfig {
-    let mut config = tls_config::client_config().unwrap();
-    config.alpn_protocols = vec![alpn::ALPN_H2.to_vec()];
+    let mut config = tls_config::client().unwrap();
+    config.alpn_protocols = vec![alpn::H2.to_vec()];
     config
 }
 
