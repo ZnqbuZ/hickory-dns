@@ -36,18 +36,29 @@ pub trait Transport: Send + 'static {
     ) -> Result<impl Future<Output = Result<(), NetError>> + Send + 'static, NetError>;
 }
 
-pub use super::udp_transport::Udp;
+pub use self::udp_transport::Udp;
 
-pub use super::tcp_transport::Tcp;
+pub use self::tcp_transport::Tcp;
 
 #[cfg(feature = "__tls")]
-pub use super::tls_transport::Tls;
+pub use self::tls_transport::Tls;
 
 #[cfg(feature = "__https")]
-pub use super::h2_handler::Https;
+pub use self::h2_handler::Https;
 
 #[cfg(feature = "__quic")]
-pub use super::quic_handler::Quic;
+pub use self::quic_handler::Quic;
 
 #[cfg(feature = "__h3")]
-pub use super::h3_handler::H3;
+pub use self::h3_handler::H3;
+
+#[cfg(feature = "__https")]
+mod h2_handler;
+#[cfg(feature = "__h3")]
+mod h3_handler;
+#[cfg(feature = "__quic")]
+mod quic_handler;
+mod tcp_transport;
+#[cfg(feature = "__tls")]
+mod tls_transport;
+mod udp_transport;
