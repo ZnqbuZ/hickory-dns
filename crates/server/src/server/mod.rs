@@ -7,22 +7,16 @@
 
 //! `Server` component for hosting domain name server operations.
 
-#[cfg(feature = "__tls")]
-use std::io;
 use std::{fmt, net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
 use ipnet::IpNet;
-#[cfg(feature = "__tls")]
-use rustls::{ServerConfig, server::ResolvesServerCert};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 #[cfg(feature = "metrics")]
 use crate::metrics::ResponseHandlerMetrics;
-#[cfg(feature = "__tls")]
-use crate::net::tls::default_provider;
 use crate::{
     access::AccessControl,
     net::{BufDnsStreamHandle, NetError, runtime::TokioTime, xfer::Protocol},
@@ -43,6 +37,12 @@ mod h2_handler;
 mod h3_handler;
 #[cfg(feature = "__quic")]
 mod quic_handler;
+#[cfg(feature = "__tls")]
+pub use crate::net::tls::tls_config;
+
+#[cfg(feature = "__tls")]
+pub use crate::net::tls::tls_config::default_tls_server_config;
+
 pub mod transport;
 pub use transport::Transport;
 
@@ -133,23 +133,6 @@ impl<T: RequestHandler> Server<T> {
 
         out
     }
-}
-
-/// Construct a default `ServerConfig` for the given ALPN protocol and server cert resolver.
-#[cfg(feature = "__tls")]
-pub fn default_tls_server_config(
-    protocol: &[u8],
-    server_cert_resolver: Arc<dyn ResolvesServerCert>,
-) -> io::Result<ServerConfig> {
-    let mut config = ServerConfig::builder_with_provider(Arc::new(default_provider()))
-        .with_safe_default_protocol_versions()
-        .map_err(|e| io::Error::other(format!("error creating TLS acceptor: {e}")))?
-        .with_no_client_auth()
-        .with_cert_resolver(server_cert_resolver);
-
-    config.alpn_protocols = vec![protocol.to_vec()];
-
-    Ok(config)
 }
 
 /// Shared request handling and shutdown state for downstream transports.
@@ -472,7 +455,7 @@ mod tests {
 
     use futures_util::future;
     #[cfg(feature = "__tls")]
-    use rustls::sign::SingleCertAndKey;
+    use rustls::{server::ResolvesServerCert, sign::SingleCertAndKey};
     #[cfg(feature = "__tls")]
     use test_support::TestCertificates;
     use test_support::subscribe;
