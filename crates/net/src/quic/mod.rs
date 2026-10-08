@@ -14,7 +14,7 @@ use quinn::Runtime;
 
 mod quic_client_stream;
 mod quic_config;
-mod quic_server;
+pub(crate) mod quic_server;
 mod quic_stream;
 
 #[cfg(feature = "__h3")]

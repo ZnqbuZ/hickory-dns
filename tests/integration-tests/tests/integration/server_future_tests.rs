@@ -468,3 +468,61 @@ async fn edns_multiple_opt_rr() {
     server_continue.store(false, Ordering::Relaxed);
     server.await.unwrap();
 }
+
+#[cfg(feature = "__quic")]
+#[tokio::test]
+async fn test_server_www_quic() {
+    subscribe();
+
+    let certificates = TestCertificates::generate();
+    let server_cert_resolver = SingleCertAndKey::from(certificates.certified_key());
+
+    let udp_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let ipaddr = udp_socket.local_addr().unwrap();
+
+    let mut server = Server::new(new_catalog());
+    let quic = hickory_server::server::transport::Quic::from_cert_resolver(
+        udp_socket,
+        Arc::new(server_cert_resolver),
+    )
+    .handshake_timeout(Duration::from_secs(5));
+    server.register(quic).unwrap();
+
+    let mut roots = RootCertStore::empty();
+    let (_, ignored) = roots.add_parsable_certificates([certificates.ca.der().clone()]);
+    assert_eq!(ignored, 0);
+
+    let client_config = ClientConfig::builder_with_provider(Arc::new(default_provider()))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+
+    let (client, bg) = Client::<TokioRuntimeProvider>::from_sender(
+        hickory_net::quic::QuicClientStream::builder()
+            .crypto_config(client_config)
+            .build(ipaddr, Arc::from("ns.example.com"))
+            .await
+            .expect("client failed to connect"),
+    );
+    tokio::spawn(bg);
+
+    let mut message = Message::query();
+    message.add_query(Query::new(
+        Name::from_str("www.example.com.").unwrap(),
+        RecordType::A,
+    ));
+    message.metadata.id = 0;
+
+    let mut client_result = client
+        .send(DnsRequest::from(message))
+        .try_collect::<Vec<_>>()
+        .await
+        .expect("query failed");
+
+    assert_eq!(client_result.len(), 1);
+    let client_result = client_result.pop().unwrap();
+    assert_eq!(client_result.metadata.response_code, ResponseCode::NoError);
+
+    server.shutdown_gracefully().await.unwrap();
+}

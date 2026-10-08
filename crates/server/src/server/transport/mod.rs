@@ -45,3 +45,6 @@ pub use super::tls_transport::Tls;
 
 #[cfg(feature = "__https")]
 pub use super::h2_handler::Https;
+
+#[cfg(feature = "__quic")]
+pub use super::quic_handler::Quic;

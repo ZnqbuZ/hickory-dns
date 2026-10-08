@@ -20,25 +20,23 @@ use crate::{
         op::{Message, Query},
         rr::{Name, RecordType},
     },
-    quic::{QuicClientStreamBuilder, QuicStreams},
-    tls::default_provider,
+    quic::QuicClientStreamBuilder,
+    tls as tls_config,
     xfer::DnsRequestSender,
 };
 
 use super::quic_server::QuicServer;
 
-async fn server_responder(mut server: QuicServer) {
-    while let Some(incoming) = server.next().await {
-        println!("received client request {}", incoming.remote_address());
-
-        let connecting = incoming
-            .accept()
-            .expect("failed to accept next quic connection");
-        let mut conn = QuicStreams::new(connecting)
-            .await
-            .expect("failed to establish next quic connection");
-        while let Some(stream) = conn.next().await {
-            let mut stream = stream.expect("new client stream failed");
+async fn server_responder(mut listener: QuicServer) {
+    if let Some(connection) = listener.next(None).await {
+        let mut conn = connection.expect("failed to accept next quic connection");
+        println!("received client request {}", conn.src_addr);
+        loop {
+            let mut stream = conn
+                .connection
+                .next()
+                .await
+                .expect("new client stream failed");
 
             let bytes = stream.receive_bytes().await.expect("failed to receive");
             let client_message = Message::from_vec(&bytes).expect("failed to parse message");
@@ -77,11 +75,12 @@ async fn test_quic_stream() {
     let (_, ignored) = roots.add_parsable_certificates([certificates.ca.der().clone()]);
     assert_eq!(ignored, 0);
 
-    let mut client_config = ClientConfig::builder_with_provider(Arc::new(default_provider()))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+    let mut client_config =
+        ClientConfig::builder_with_provider(Arc::new(tls_config::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
 
     client_config.key_log = Arc::new(KeyLogFile::new());
 

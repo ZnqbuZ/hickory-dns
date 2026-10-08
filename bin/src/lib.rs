@@ -45,6 +45,9 @@ use hickory_server::server::transport::Tls;
 #[cfg(feature = "__https")]
 use hickory_server::server::transport::Https;
 
+#[cfg(feature = "__quic")]
+use hickory_server::server::transport::Quic;
+
 mod config;
 use config::{Config, TcpSocketConfig, UdpSocketConfig};
 
@@ -720,12 +723,12 @@ impl ServerSetup<'_> {
         for addr in &self.listen_addrs {
             info!("Binding QUIC to {addr:?}");
 
-            let quic_listener = build_udp_socket(*addr, port, self.udp_socket_config)
+            let quic_server = build_udp_socket(*addr, port, self.udp_socket_config)
                 .map_err(|err| format!("failed to bind to QUIC socket address {addr:?}: {err}"))?;
 
             info!(
                 "listening for QUIC on {:?}",
-                quic_listener
+                quic_server
                     .local_addr()
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
@@ -739,12 +742,11 @@ impl ServerSetup<'_> {
             }
 
             self.server
-                .register_quic_listener_and_tls_config(
-                    quic_listener,
-                    self.handshake_timeout,
-                    self.idle_timeout,
-                    self.request_timeout,
-                    Arc::new(tls_config),
+                .register(
+                    Quic::new(quic_server, Arc::new(tls_config))
+                        .maybe_handshake_timeout(self.handshake_timeout)
+                        .maybe_idle_timeout(self.idle_timeout)
+                        .maybe_request_timeout(self.request_timeout),
                 )
                 .map_err(|err| format!("failed to register QUIC listener: {err}"))?;
         }

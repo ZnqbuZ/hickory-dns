@@ -7,13 +7,13 @@
 
 //! `Server` component for hosting a domain name servers operations.
 
-#[cfg(any(feature = "__quic", feature = "__h3"))]
+#[cfg(feature = "__h3")]
 use std::future::Future;
 #[cfg(feature = "__tls")]
 use std::io;
-#[cfg(any(test, feature = "__quic", feature = "__h3"))]
+#[cfg(any(test, feature = "__h3"))]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-#[cfg(any(feature = "__quic", feature = "__h3"))]
+#[cfg(feature = "__h3")]
 use std::time::Duration;
 use std::{fmt, net::SocketAddr, sync::Arc};
 
@@ -21,10 +21,10 @@ use bytes::Bytes;
 use ipnet::IpNet;
 #[cfg(feature = "__tls")]
 use rustls::{ServerConfig, server::ResolvesServerCert};
-#[cfg(any(feature = "__quic", feature = "__h3"))]
+#[cfg(feature = "__h3")]
 use tokio::net;
 use tokio::task::JoinSet;
-#[cfg(any(feature = "__quic", feature = "__h3"))]
+#[cfg(feature = "__h3")]
 use tokio::time::{error::Elapsed, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -33,8 +33,6 @@ use tracing::{debug, info, warn};
 use crate::metrics::ResponseHandlerMetrics;
 #[cfg(feature = "__h3")]
 use crate::net::h3::h3_server::H3Server;
-#[cfg(feature = "__quic")]
-use crate::net::quic::QuicServer;
 #[cfg(feature = "__tls")]
 use crate::net::tls::default_provider;
 use crate::{
@@ -103,78 +101,6 @@ impl<T: RequestHandler> Server<T> {
     pub fn register(&mut self, transport: impl Transport) -> Result<(), NetError> {
         let task = transport.into_future(self.context.clone())?;
         self.join_set.spawn(task);
-        Ok(())
-    }
-
-    /// Register a UdpSocket to the Server for supporting DoQ (DNS-over-QUIC). The UdpSocket should already be bound to either an
-    /// IPv6 or an IPv4 address.
-    ///
-    /// To make the server more resilient to DOS issues, there is a timeout. Care should be taken
-    ///  to not make this too low depending on use cases.
-    ///
-    /// # Arguments
-    /// * `socket` - a bound UDP socket
-    /// * `handshake_timeout` - timeout for performing QUIC handshakes
-    /// * `idle_timeout` - timeout before closing an idle connection
-    /// * `request_timeout` - timeout for receiving a complete request over a stream
-    /// * `server_cert_resolver` - resolver for certificate and key used to announce to clients
-    /// * `dns_hostname` - the DNS hostname of the DoQ server.
-    #[cfg(feature = "__quic")]
-    pub fn register_quic_listener(
-        &mut self,
-        socket: net::UdpSocket,
-        handshake_timeout: Option<Duration>,
-        idle_timeout: Option<Duration>,
-        request_timeout: Option<Duration>,
-        server_cert_resolver: Arc<dyn ResolvesServerCert>,
-    ) -> io::Result<()> {
-        let cx = self.context.clone();
-        self.join_set.spawn(quic_handler::handle_quic(
-            socket,
-            handshake_timeout,
-            idle_timeout,
-            request_timeout,
-            server_cert_resolver,
-            cx,
-        ));
-        Ok(())
-    }
-
-    /// Register a UdpSocket for supporting DoQ (DNS-over-QUIC) with the provided TLS config.
-    ///
-    /// The UdpSocket should already be bound to either an IPv6 or an IPv4 address.
-    ///
-    /// The TLS `ServerConfig` should be configured with TLS 1.3 support and the DoQ ALPN protocol
-    /// enabled.
-    ///
-    /// To make the server more resilient to DOS issues, there is a timeout. Care should be taken
-    ///  to not make this too low depending on use cases.
-    ///
-    /// # Arguments
-    /// * `socket` - a bound UDP socket
-    /// * `handshake_timeout` - timeout for performing QUIC handshakes
-    /// * `idle_timeout` - timeout before closing an idle connection
-    /// * `request_timeout` - timeout for receiving a complete request over a stream
-    /// * `tls_config` - a customized ServerConfig to use for TLS.
-    /// * `dns_hostname` - the DNS hostname of the DoQ server.
-    #[cfg(feature = "__quic")]
-    pub fn register_quic_listener_and_tls_config(
-        &mut self,
-        socket: net::UdpSocket,
-        handshake_timeout: Option<Duration>,
-        idle_timeout: Option<Duration>,
-        request_timeout: Option<Duration>,
-        tls_config: Arc<ServerConfig>,
-    ) -> Result<(), NetError> {
-        let cx = self.context.clone();
-
-        self.join_set.spawn(quic_handler::handle_quic_with_server(
-            QuicServer::with_socket_and_tls_config(socket, tls_config)?,
-            handshake_timeout,
-            idle_timeout,
-            request_timeout,
-            cx,
-        ));
         Ok(())
     }
 
@@ -287,7 +213,7 @@ impl<T: RequestHandler> Server<T> {
     }
 }
 
-#[cfg(any(test, feature = "__quic", feature = "__h3"))]
+#[cfg(any(test, feature = "__h3"))]
 fn reap_tasks(join_set: &mut JoinSet<()>) {
     while join_set.try_join_next().is_some() {}
 }
@@ -618,7 +544,7 @@ impl<R: ResponseHandler> ResponseHandler for ReportingResponseHandler<R> {
     }
 }
 
-#[cfg(any(test, feature = "__quic", feature = "__h3"))]
+#[cfg(any(test, feature = "__h3"))]
 fn sanitize_src_address(src: SocketAddr) -> Result<(), String> {
     // currently checks that the src address aren't either the undefined IPv4 or IPv6 address, and not port 0.
     if src.port() == 0 {
@@ -659,7 +585,7 @@ fn is_unrecoverable_socket_error(err: &io::Error) -> bool {
     matches!(err.kind(), io::ErrorKind::NotConnected)
 }
 
-#[cfg(any(feature = "__quic", feature = "__h3"))]
+#[cfg(feature = "__h3")]
 async fn optional_timeout<T>(
     timeout_opt: Option<Duration>,
     future: impl Future<Output = T>,
@@ -687,6 +613,8 @@ mod tests {
     use super::*;
     #[cfg(feature = "__https")]
     use crate::server::transport::Https;
+    #[cfg(feature = "__quic")]
+    use crate::server::transport::Quic;
     use crate::server::transport::Tcp;
     #[cfg(feature = "__tls")]
     use crate::server::transport::Tls;
@@ -835,15 +763,14 @@ mod tests {
             #[cfg(feature = "__quic")]
             {
                 let cert_key = rustls_cert_key();
-                server
-                    .register_quic_listener(
-                        UdpSocket::bind(self.quic_addr).await.unwrap(),
-                        Some(Duration::from_secs(1)),
-                        Some(Duration::from_secs(1)),
-                        Some(Duration::from_secs(1)),
-                        cert_key,
-                    )
-                    .unwrap();
+                let quic = Quic::from_cert_resolver(
+                    UdpSocket::bind(self.quic_addr).await.unwrap(),
+                    cert_key,
+                )
+                .handshake_timeout(Duration::from_secs(1))
+                .idle_timeout(Duration::from_secs(1))
+                .request_timeout(Duration::from_secs(1));
+                server.register(quic).unwrap();
             }
 
             #[cfg(feature = "__h3")]
@@ -909,7 +836,7 @@ mod utils {
     //! Helpers shared by the server request pipeline and the transports.
 
     use std::io;
-    #[cfg(feature = "__https")]
+    #[cfg(any(feature = "__https", feature = "__quic"))]
     use std::{future::Future, time::Duration};
 
     use tokio::task::JoinSet;
@@ -925,7 +852,7 @@ mod utils {
     }
 
     /// Optionally applies a timeout to a future.
-    #[cfg(feature = "__https")]
+    #[cfg(any(feature = "__https", feature = "__quic"))]
     pub(crate) async fn optional_timeout<T>(
         timeout: Option<Duration>,
         future: impl Future<Output = T>,
