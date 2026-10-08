@@ -9,8 +9,6 @@
 
 #[cfg(feature = "__tls")]
 use std::io;
-#[cfg(test)]
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::{fmt, net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
@@ -135,12 +133,6 @@ impl<T: RequestHandler> Server<T> {
 
         out
     }
-}
-
-#[cfg(test)]
-#[cfg(any(test, feature = "__h3"))]
-fn reap_tasks(join_set: &mut JoinSet<()>) {
-    while join_set.try_join_next().is_some() {}
 }
 
 /// Construct a default `ServerConfig` for the given ALPN protocol and server cert resolver.
@@ -470,43 +462,6 @@ impl<R: ResponseHandler> ResponseHandler for ReportingResponseHandler<R> {
 }
 
 #[cfg(test)]
-#[cfg(any(test, feature = "__h3"))]
-fn sanitize_src_address(src: SocketAddr) -> Result<(), String> {
-    // currently checks that the src address aren't either the undefined IPv4 or IPv6 address, and not port 0.
-    if src.port() == 0 {
-        return Err(format!("cannot respond to src on port 0: {src}"));
-    }
-
-    fn verify_v4(src: Ipv4Addr) -> Result<(), String> {
-        if src.is_unspecified() {
-            return Err(format!("cannot respond to unspecified v4 addr: {src}"));
-        }
-
-        if src.is_broadcast() {
-            return Err(format!("cannot respond to broadcast v4 addr: {src}"));
-        }
-
-        // TODO: add check for is_reserved when that stabilizes
-
-        Ok(())
-    }
-
-    fn verify_v6(src: Ipv6Addr) -> Result<(), String> {
-        if src.is_unspecified() {
-            return Err(format!("cannot respond to unspecified v6 addr: {src}"));
-        }
-
-        Ok(())
-    }
-
-    // currently checks that the src address aren't either the undefined IPv4 or IPv6 address, and not port 0.
-    match src.ip() {
-        IpAddr::V4(v4) => verify_v4(v4),
-        IpAddr::V6(v6) => verify_v6(v6),
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
     use std::time::Duration;
@@ -571,30 +526,6 @@ mod tests {
             .expect("error while awaiting tasks");
 
         endpoints.rebind_all().await;
-    }
-
-    #[test]
-    fn test_sanitize_src_addr() {
-        // ipv4 tests
-        assert!(sanitize_src_address(SocketAddr::from(([192, 168, 1, 1], 4_096))).is_ok());
-        assert!(sanitize_src_address(SocketAddr::from(([127, 0, 0, 1], 53))).is_ok());
-
-        assert!(sanitize_src_address(SocketAddr::from(([0, 0, 0, 0], 0))).is_err());
-        assert!(sanitize_src_address(SocketAddr::from(([192, 168, 1, 1], 0))).is_err());
-        assert!(sanitize_src_address(SocketAddr::from(([0, 0, 0, 0], 4_096))).is_err());
-        assert!(sanitize_src_address(SocketAddr::from(([255, 255, 255, 255], 4_096))).is_err());
-
-        // ipv6 tests
-        assert!(
-            sanitize_src_address(SocketAddr::from(([0x20, 0, 0, 0, 0, 0, 0, 0x1], 4_096))).is_ok()
-        );
-        assert!(sanitize_src_address(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 4_096))).is_ok());
-
-        assert!(sanitize_src_address(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 4_096))).is_err());
-        assert!(sanitize_src_address(SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 0))).is_err());
-        assert!(
-            sanitize_src_address(SocketAddr::from(([0x20, 0, 0, 0, 0, 0, 0, 0x1], 0))).is_err()
-        );
     }
 
     #[derive(Clone)]
@@ -724,27 +655,6 @@ mod tests {
         ))
     }
 
-    #[test]
-    fn task_reap_on_empty_joinset() {
-        let mut joinset = JoinSet::new();
-
-        // this should return immediately
-        reap_tasks(&mut joinset);
-    }
-
-    #[tokio::test]
-    async fn task_reap_on_nonempty_joinset() {
-        let mut joinset = JoinSet::new();
-        let t = joinset.spawn(tokio::time::sleep(Duration::from_secs(2)));
-
-        // this should return immediately since no task is ready
-        reap_tasks(&mut joinset);
-        t.abort();
-
-        // this should also return immediately since the task has been aborted
-        reap_tasks(&mut joinset);
-    }
-
     #[tokio::test]
     async fn test_custom_listener_permanent_close() {
         let mut server = Server::new(Catalog::new());
@@ -825,37 +735,7 @@ mod tests {
     }
 }
 
-mod utils {
-    //! Helpers shared by the server request pipeline and the transports.
-
-    use std::io;
-    #[cfg(any(feature = "__https", feature = "__quic", feature = "__h3"))]
-    use std::{future::Future, time::Duration};
-
-    use tokio::task::JoinSet;
-
-    /// Reap finished tasks from a `JoinSet`, without awaiting or blocking.
-    pub(crate) fn reap_tasks(join_set: &mut JoinSet<()>) {
-        while join_set.try_join_next().is_some() {}
-    }
-
-    /// Returns `true` if an `accept()` error means the listener itself is no longer usable.
-    pub(crate) fn is_unrecoverable_socket_error(err: &io::Error) -> bool {
-        matches!(err.kind(), io::ErrorKind::NotConnected)
-    }
-
-    /// With no deadline configured, preserve the operation's own timeout and cancellation behavior.
-    #[cfg(any(feature = "__https", feature = "__quic", feature = "__h3"))]
-    pub(crate) async fn optional_timeout<T>(
-        timeout: Option<Duration>,
-        future: impl Future<Output = T>,
-    ) -> Result<T, tokio::time::error::Elapsed> {
-        match timeout {
-            Some(duration) => tokio::time::timeout(duration, future).await,
-            None => Ok(future.await),
-        }
-    }
-}
+mod utils;
 
 mod udp_transport {
     use std::{future::Future, sync::Arc};
