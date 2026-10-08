@@ -37,6 +37,8 @@ use hickory_server::{server::Server, zone_handler::Catalog};
 
 use hickory_server::server::transport::Udp;
 
+use hickory_server::server::transport::Tcp;
+
 mod config;
 use config::{Config, TcpSocketConfig, UdpSocketConfig};
 
@@ -592,11 +594,13 @@ impl ServerSetup<'_> {
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
 
-            self.server.register_listener(
-                tcp_listener,
-                self.stream_timeout(),
-                self.tcp_socket_config.response_buffer_size,
-            );
+            self.server
+                .register(
+                    Tcp::new(tcp_listener)
+                        .maybe_stream_timeout(self.stream_timeout())
+                        .response_buffer_size(self.tcp_socket_config.response_buffer_size),
+                )
+                .map_err(|err| format!("failed to register TCP listener: {err}"))?;
         }
 
         Ok(())

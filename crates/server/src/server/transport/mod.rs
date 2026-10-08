@@ -37,3 +37,5 @@ pub trait Transport: Send + 'static {
 }
 
 pub use super::udp_transport::Udp;
+
+pub use super::tcp_transport::Tcp;
