@@ -505,6 +505,10 @@ fn sanitize_src_address(src: SocketAddr) -> Result<(), String> {
 mod tests {
     use std::net::SocketAddr;
     use std::time::Duration;
+    use std::{
+        io,
+        task::{Context, Poll},
+    };
 
     use futures_util::future;
     #[cfg(feature = "__tls")]
@@ -512,10 +516,12 @@ mod tests {
     #[cfg(feature = "__tls")]
     use test_support::TestCertificates;
     use test_support::subscribe;
+    use tokio::net::TcpStream;
     use tokio::net::{TcpListener, UdpSocket};
     use tokio::time::timeout;
 
     use super::*;
+    use crate::net::runtime::{Accepted, DnsTcpListener, iocompat::AsyncIoTokioAsStd};
     #[cfg(feature = "__h3")]
     use crate::server::transport::H3;
     #[cfg(feature = "__https")]
@@ -732,6 +738,85 @@ mod tests {
 
         // this should also return immediately since the task has been aborted
         reap_tasks(&mut joinset);
+    }
+
+    #[tokio::test]
+    async fn test_custom_listener_permanent_close() {
+        let mut server = Server::new(Catalog::new());
+        server.register(Tcp::new(ClosedListener)).unwrap();
+
+        let result = timeout(Duration::from_secs(1), server.block_until_done()).await;
+        assert!(result.is_ok(), "server accept loop timed out or hung");
+        assert!(result.unwrap().is_err());
+    }
+
+    #[derive(Debug)]
+    struct ClosedListener;
+
+    impl DnsTcpListener for ClosedListener {
+        type Stream = AsyncIoTokioAsStd<TcpStream>;
+
+        fn poll_accept(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<io::Result<Accepted<Self::Stream>>> {
+            Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "listener closed permanently",
+            )))
+        }
+    }
+
+    #[cfg(feature = "__quic")]
+    #[tokio::test]
+    async fn test_quic_socket_conversion_failure() {
+        use crate::net::quic::{AsyncUdpSocket, IntoQuicSocket};
+
+        #[derive(Debug)]
+        struct FailingQuicSocket;
+        impl IntoQuicSocket for FailingQuicSocket {
+            fn into_quic_socket(self) -> io::Result<Arc<dyn AsyncUdpSocket>> {
+                Err(io::Error::other("simulated quic socket conversion failure"))
+            }
+        }
+
+        let mut server = Server::new(Catalog::new());
+        let cert_key = rustls_cert_key();
+        let quic_res = server.register(Quic::from_cert_resolver(FailingQuicSocket, cert_key));
+        assert!(
+            quic_res.is_err(),
+            "socket conversion failure should fail synchronously"
+        );
+        assert!(
+            server.join_set.is_empty(),
+            "failed registration must not leave spawned tasks"
+        );
+    }
+
+    #[cfg(feature = "__h3")]
+    #[tokio::test]
+    async fn test_h3_socket_conversion_failure() {
+        use crate::net::quic::{AsyncUdpSocket, IntoQuicSocket};
+
+        #[derive(Debug)]
+        struct FailingH3Socket;
+        impl IntoQuicSocket for FailingH3Socket {
+            fn into_quic_socket(self) -> io::Result<Arc<dyn AsyncUdpSocket>> {
+                Err(io::Error::other("simulated h3 socket conversion failure"))
+            }
+        }
+
+        let mut server = Server::new(Catalog::new());
+        let cert_key = rustls_cert_key();
+        let h3_res = server.register(H3::from_cert_resolver(FailingH3Socket, cert_key));
+        assert!(
+            h3_res.is_err(),
+            "socket conversion failure should fail synchronously"
+        );
+        assert!(
+            server.join_set.is_empty(),
+            "failed registration must not leave spawned tasks"
+        );
     }
 }
 

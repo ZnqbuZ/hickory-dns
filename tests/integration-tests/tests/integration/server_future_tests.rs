@@ -18,6 +18,7 @@ use rustls::{
 use test_support::TestCertificates;
 use tokio::net::TcpListener;
 use tokio::net::UdpSocket;
+use tokio::task::JoinSet;
 
 use hickory_integration::example_zone::create_example;
 use hickory_net::client::{Client, ClientHandle};
@@ -580,6 +581,223 @@ async fn test_server_www_h3() {
     assert_eq!(client_result.len(), 1);
     let client_result = client_result.pop().unwrap();
     assert_eq!(client_result.metadata.response_code, ResponseCode::NoError);
+
+    server.shutdown_gracefully().await.unwrap();
+}
+
+#[derive(Debug)]
+struct CustomUdpSocket(UdpSocket);
+
+#[async_trait::async_trait]
+impl hickory_net::runtime::DnsUdpSocket for CustomUdpSocket {
+    type Time = hickory_net::runtime::TokioTime;
+
+    fn poll_recv_from(
+        &self,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> std::task::Poll<std::io::Result<(usize, SocketAddr)>> {
+        let mut read_buf = tokio::io::ReadBuf::new(buf);
+        match self.0.poll_recv_from(cx, &mut read_buf) {
+            std::task::Poll::Ready(Ok(addr)) => {
+                std::task::Poll::Ready(Ok((read_buf.filled().len(), addr)))
+            }
+            std::task::Poll::Ready(Err(e)) => std::task::Poll::Ready(Err(e)),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+
+    fn poll_send_to(
+        &self,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+        target: SocketAddr,
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        self.0.poll_send_to(cx, buf, target)
+    }
+}
+
+#[derive(Debug)]
+struct CustomTcpStream(hickory_net::runtime::iocompat::AsyncIoTokioAsStd<tokio::net::TcpStream>);
+
+impl futures_io::AsyncRead for CustomTcpStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+impl futures_io::AsyncWrite for CustomTcpStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_close(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_close(cx)
+    }
+}
+
+impl hickory_net::runtime::DnsTcpStream for CustomTcpStream {
+    type Time = hickory_net::runtime::TokioTime;
+}
+
+#[derive(Debug)]
+struct CustomTcpListener(TcpListener);
+
+impl hickory_net::runtime::DnsTcpListener for CustomTcpListener {
+    type Stream = CustomTcpStream;
+
+    fn poll_accept(
+        &mut self,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<hickory_net::runtime::Accepted<CustomTcpStream>>> {
+        match self.0.poll_accept(cx) {
+            std::task::Poll::Ready(Ok((stream, addr))) => {
+                std::task::Poll::Ready(Ok(hickory_net::runtime::Accepted {
+                    connection: CustomTcpStream(hickory_net::runtime::iocompat::AsyncIoTokioAsStd(
+                        stream,
+                    )),
+                    src_addr: addr,
+                }))
+            }
+            std::task::Poll::Ready(Err(e)) => std::task::Poll::Ready(Err(e)),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_server_custom_sockets_and_newtypes() {
+    subscribe();
+
+    let raw_custom_udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let custom_udp_addr = raw_custom_udp.local_addr().unwrap();
+    let custom_udp = CustomUdpSocket(raw_custom_udp);
+
+    let raw_custom_tcp = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let custom_tcp_addr = raw_custom_tcp.local_addr().unwrap();
+    let custom_tcp = CustomTcpListener(raw_custom_tcp);
+
+    let standard_udp = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let standard_udp_addr = standard_udp.local_addr().unwrap();
+
+    let mut server = Server::new(new_catalog());
+    // Register custom UDP without provider
+    server.register(Udp::new(custom_udp)).unwrap();
+    // Register custom TCP without provider
+    server
+        .register(Tcp::new(custom_tcp).stream_timeout(Duration::from_secs(5)))
+        .unwrap();
+    // Register standard UDP on the SAME server
+    server.register(Udp::new(standard_udp)).unwrap();
+
+    // Verify custom UDP handles queries
+    client_thread_www(lazy_udp_client(custom_udp_addr)).await;
+
+    // Verify custom TCP handles queries
+    client_thread_www(lazy_tcp_client(custom_tcp_addr)).await;
+
+    // Verify standard UDP on same server handles queries
+    client_thread_www(lazy_udp_client(standard_udp_addr)).await;
+
+    server.shutdown_gracefully().await.unwrap();
+}
+
+struct DownstreamUdpTransport {
+    socket: UdpSocket,
+}
+
+impl hickory_server::server::Transport for DownstreamUdpTransport {
+    fn into_future<H: hickory_server::server::RequestHandler>(
+        self,
+        context: Arc<hickory_server::server::ServerContext<H>>,
+    ) -> Result<
+        impl Future<Output = Result<(), hickory_net::NetError>> + Send + 'static,
+        hickory_net::NetError,
+    > {
+        let socket = Arc::new(self.socket);
+        Ok(async move {
+            // The transport owns its request tasks in a local set. Dropping the set
+            // cancels the requests without waiting for cancellation to complete.
+            let mut requests = JoinSet::new();
+
+            let mut buf = vec![0u8; 2048];
+            let result = loop {
+                let (len, src_addr) = match context
+                    .shutdown_token()
+                    .run_until_cancelled(socket.recv_from(&mut buf))
+                    .await
+                {
+                    Some(Ok(res)) => res,
+                    Some(Err(e)) => break Err(hickory_net::NetError::from(e)),
+                    None => break Ok(()),
+                };
+
+                let query_bytes = bytes::Bytes::copy_from_slice(&buf[..len]);
+                let (stream_handle, mut rx) = hickory_net::BufDnsStreamHandle::new(src_addr);
+                let response_handle = hickory_server::server::ResponseHandle::new(
+                    src_addr,
+                    stream_handle,
+                    hickory_net::xfer::Protocol::Udp,
+                );
+
+                let cx = context.clone();
+                let socket = socket.clone();
+                let request = async move {
+                    use futures::StreamExt;
+                    cx.handle_request(
+                        query_bytes,
+                        src_addr,
+                        hickory_net::xfer::Protocol::Udp,
+                        response_handle,
+                    )
+                    .await;
+                    if let Some(msg) = rx.next().await {
+                        let _ = socket.send_to(msg.bytes(), src_addr).await;
+                    }
+                };
+                requests.spawn(request);
+
+                while let Some(result) = requests.try_join_next() {
+                    result.expect("request task failed");
+                }
+            };
+
+            result
+        })
+    }
+}
+
+#[tokio::test]
+async fn test_downstream_custom_transport() {
+    subscribe();
+
+    let udp_socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let addr = udp_socket.local_addr().unwrap();
+
+    let mut server = Server::new(new_catalog());
+    server
+        .register(DownstreamUdpTransport { socket: udp_socket })
+        .unwrap();
+
+    client_thread_www(lazy_udp_client(addr)).await;
 
     server.shutdown_gracefully().await.unwrap();
 }
