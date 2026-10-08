@@ -32,12 +32,15 @@ use tracing::{error, info};
 use hickory_server::proto::ProtoError;
 use hickory_server::proto::rr::rdata::opt::NSIDPayload;
 #[cfg(feature = "__tls")]
-use hickory_server::server::default_tls_server_config;
+use hickory_server::server as tls_config;
 use hickory_server::{server::Server, zone_handler::Catalog};
 
 use hickory_server::server::transport::Udp;
 
 use hickory_server::server::transport::Tcp;
+
+#[cfg(feature = "__tls")]
+use hickory_server::server::transport::Tls;
 
 mod config;
 use config::{Config, TcpSocketConfig, UdpSocketConfig};
@@ -639,19 +642,19 @@ impl ServerSetup<'_> {
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
 
-            let mut tls_config = default_tls_server_config(b"dot", cert_resolver.clone())
-                .map_err(|err| format!("failed to build default TLS config: {err}"))?;
+            let mut tls_config =
+                tls_config::default_tls_server_config(b"dot", cert_resolver.clone())
+                    .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
                 warn!("DoT SSL_KEYLOG_FILE support enabled");
                 tls_config.key_log = Arc::new(KeyLogFile::new());
             }
 
             self.server
-                .register_tls_listener_with_tls_config(
-                    tls_listener,
-                    self.handshake_timeout,
-                    self.stream_timeout(),
-                    Arc::new(tls_config),
+                .register(
+                    Tls::new(tls_listener, Arc::new(tls_config))
+                        .maybe_handshake_timeout(self.handshake_timeout)
+                        .maybe_stream_timeout(self.stream_timeout()),
                 )
                 .map_err(|err| format!("failed to register TLS listener: {err}"))?;
         }
@@ -682,8 +685,9 @@ impl ServerSetup<'_> {
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
 
-            let mut tls_config = default_tls_server_config(b"h2", cert_resolver.clone())
-                .map_err(|err| format!("failed to build default TLS config: {err}"))?;
+            let mut tls_config =
+                tls_config::default_tls_server_config(b"h2", cert_resolver.clone())
+                    .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
                 warn!("DoH SSL_KEYLOG_FILE support enabled");
                 tls_config.key_log = Arc::new(KeyLogFile::new());
@@ -724,8 +728,9 @@ impl ServerSetup<'_> {
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
 
-            let mut tls_config = default_tls_server_config(b"doq", cert_resolver.clone())
-                .map_err(|err| format!("failed to build default TLS config: {err}"))?;
+            let mut tls_config =
+                tls_config::default_tls_server_config(b"doq", cert_resolver.clone())
+                    .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
                 warn!("DoQ SSL_KEYLOG_FILE support enabled");
                 tls_config.key_log = Arc::new(KeyLogFile::new());

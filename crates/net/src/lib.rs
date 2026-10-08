@@ -41,6 +41,8 @@ pub use crate::xfer::retry_dns_handle::RetryDnsHandle;
 
 mod utils {
     use std::net::{IpAddr, SocketAddr};
+    #[cfg(feature = "__tls")]
+    use std::{future::Future, time::Duration};
 
     /// Checks if the IP address is safe for returning messages.
     ///
@@ -65,6 +67,18 @@ mod utils {
                 Err(format!("cannot respond to unspecified v6 addr: {ip}"))
             }
             _ => Ok(()),
+        }
+    }
+
+    /// Optionally applies a timeout to a future.
+    #[cfg(feature = "__tls")]
+    pub(crate) async fn optional_timeout<T>(
+        timeout: Option<Duration>,
+        future: impl Future<Output = T>,
+    ) -> Result<T, tokio::time::error::Elapsed> {
+        match timeout {
+            Some(duration) => tokio::time::timeout(duration, future).await,
+            None => Ok(future.await),
         }
     }
 
