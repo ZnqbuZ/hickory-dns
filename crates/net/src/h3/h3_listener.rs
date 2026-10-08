@@ -65,11 +65,11 @@ impl QuicHandshake for H3Connection {
 
 /// A listener for established DNS-over-HTTP/3 connections.
 #[derive(Debug)]
-pub struct H3Server {
+pub struct H3Listener {
     endpoint: QuicEndpoint<H3Connection>,
 }
 
-impl H3Server {
+impl H3Listener {
     /// Binds a UDP socket and constructs a listener with a default TLS configuration.
     pub async fn new(
         name_server: SocketAddr,

@@ -25,16 +25,16 @@ use crate::{
     xfer::DnsRequestSender,
 };
 
-use super::quic_server::QuicServer;
+use super::quic_listener::QuicListener;
 
-async fn server_responder(mut listener: QuicServer) {
-    if let Some(connection) = listener.next(None).await {
+async fn server_responder(mut listener: QuicListener) {
+    if let Some(connection) = listener.accept(None).await {
         let mut conn = connection.expect("failed to accept next quic connection");
         println!("received client request {}", conn.src_addr);
         loop {
             let mut stream = conn
                 .connection
-                .next()
+                .accept()
                 .await
                 .expect("new client stream failed");
 
@@ -58,12 +58,12 @@ async fn test_quic_stream() {
     let certificate_and_key = SingleCertAndKey::from(certificates.certified_key());
 
     // All testing is only done on local addresses, construct the server
-    let quic_ns = QuicServer::new(
+    let quic_ns = QuicListener::new(
         SocketAddr::from(([127, 0, 0, 1], 0)),
         Arc::new(certificate_and_key),
     )
     .await
-    .expect("failed to initialize QuicServer");
+    .expect("failed to initialize QuicListener");
 
     // kick off the server
     let server_addr = quic_ns.local_addr().expect("no address");

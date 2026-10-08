@@ -20,9 +20,9 @@ use crate::NetError;
 mod h3_client_stream;
 pub use h3_client_stream::{H3ClientStream, H3ClientStreamBuilder};
 mod h3_config;
-pub mod h3_server;
+mod h3_listener;
 
-pub use h3_server::{H3Connection, H3Server};
+pub use h3_listener::{H3Connection, H3Listener};
 
 /// [`Stream`] adapter for h3 body streaming.
 pub struct BodyStream<T>(T);

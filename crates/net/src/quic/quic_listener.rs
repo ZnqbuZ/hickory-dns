@@ -23,13 +23,13 @@ use rustls::server::ServerConfig as TlsServerConfig;
 use tokio::net::UdpSocket;
 
 /// An established QUIC connection that accepts bidirectional streams.
-pub struct QuicStreams {
+pub struct QuicConnection {
     connection: Connection,
 }
 
-impl QuicStreams {
+impl QuicConnection {
     /// Get the next bidirectional stream from the client
-    pub async fn next(&mut self) -> Result<QuicStream, NetError> {
+    pub async fn accept(&mut self) -> Result<QuicStream, NetError> {
         match self.connection.accept_bi().await {
             Ok((send, receive)) => Ok(QuicStream::new(send, receive)),
             Err(e) => Err(NetError::from(e)),
@@ -37,7 +37,7 @@ impl QuicStreams {
     }
 }
 
-impl QuicHandshake for QuicStreams {
+impl QuicHandshake for QuicConnection {
     async fn handshake(connecting: Connecting) -> Result<Self, NetError> {
         Ok(Self {
             connection: connecting.await?,
@@ -47,11 +47,11 @@ impl QuicHandshake for QuicStreams {
 
 /// A listener for established DNS-over-QUIC connections.
 #[derive(Debug)]
-pub struct QuicServer {
-    endpoint: QuicEndpoint<QuicStreams>,
+pub struct QuicListener {
+    endpoint: QuicEndpoint<QuicConnection>,
 }
 
-impl QuicServer {
+impl QuicListener {
     /// Binds a UDP socket and constructs a listener with a default TLS configuration.
     pub async fn new(
         name_server: SocketAddr,
@@ -94,10 +94,10 @@ impl QuicServer {
     ///
     /// Cancelling this future leaves already-started handshakes owned by the listener.
     /// A subsequent call can receive their completed connections.
-    pub async fn next(
+    pub async fn accept(
         &mut self,
         timeout: Option<Duration>,
-    ) -> Option<Result<Accepted<QuicStreams>, NetError>> {
+    ) -> Option<Result<Accepted<QuicConnection>, NetError>> {
         self.endpoint.accept(timeout).await
     }
 

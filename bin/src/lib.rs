@@ -724,12 +724,12 @@ impl ServerSetup<'_> {
         for addr in &self.listen_addrs {
             info!("Binding QUIC to {addr:?}");
 
-            let quic_server = build_udp_socket(*addr, port, self.udp_socket_config)
+            let quic_listener = build_udp_socket(*addr, port, self.udp_socket_config)
                 .map_err(|err| format!("failed to bind to QUIC socket address {addr:?}: {err}"))?;
 
             info!(
                 "listening for QUIC on {:?}",
-                quic_server
+                quic_listener
                     .local_addr()
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
@@ -744,7 +744,7 @@ impl ServerSetup<'_> {
 
             self.server
                 .register(
-                    Quic::new(quic_server, Arc::new(tls_config))
+                    Quic::new(quic_listener, Arc::new(tls_config))
                         .maybe_handshake_timeout(self.handshake_timeout)
                         .maybe_idle_timeout(self.idle_timeout)
                         .maybe_request_timeout(self.request_timeout),

@@ -11,7 +11,7 @@ use super::Transport;
 use crate::{
     net::{
         NetError,
-        h3::{BodyStream, H3Connection, H3Server},
+        h3::{BodyStream, H3Connection, H3Listener},
         http::{self, Version, fetch_body},
         quic::IntoQuicSocket,
         runtime::Accepted,
@@ -116,7 +116,7 @@ where
         self,
         cx: Arc<ServerContext<H>>,
     ) -> Result<impl Future<Output = Result<(), NetError>> + Send + 'static, NetError> {
-        let mut listener = H3Server::with_socket_and_tls_config(self.socket, self.tls_config)?;
+        let mut listener = H3Listener::with_socket_and_tls_config(self.socket, self.tls_config)?;
 
         Ok(async move {
             let mut inner_join_set = JoinSet::new();

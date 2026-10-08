@@ -11,7 +11,7 @@ use super::Transport;
 use crate::{
     net::{
         NetError,
-        quic::{IntoQuicSocket, QuicServer, QuicStream, QuicStreams},
+        quic::{IntoQuicSocket, QuicConnection, QuicListener, QuicStream},
         runtime::Accepted,
         tls::{alpn, tls_config},
         xfer::Protocol,
@@ -115,14 +115,14 @@ where
         self,
         cx: Arc<ServerContext<H>>,
     ) -> Result<impl Future<Output = Result<(), NetError>> + Send + 'static, NetError> {
-        let mut listener = QuicServer::with_socket_and_tls_config(self.socket, self.tls_config)?;
+        let mut listener = QuicListener::with_socket_and_tls_config(self.socket, self.tls_config)?;
 
         Ok(async move {
             let mut inner_join_set = JoinSet::new();
             loop {
                 let future = cx
                     .shutdown_token()
-                    .run_until_cancelled(listener.next(self.handshake_timeout));
+                    .run_until_cancelled(listener.accept(self.handshake_timeout));
                 let Some(connection_opt) = future.await else {
                     break; // A graceful shutdown was initiated. Break out of the loop.
                 };
@@ -160,7 +160,7 @@ where
 }
 
 async fn inner_quic_handler(
-    mut accepted: Accepted<QuicStreams>,
+    mut accepted: Accepted<QuicConnection>,
     idle_timeout: Option<Duration>,
     request_timeout: Option<Duration>,
     cx: Arc<ServerContext<impl RequestHandler>>,
@@ -175,7 +175,7 @@ async fn inner_quic_handler(
             .shutdown_token()
             .run_until_cancelled(utils::optional_timeout(
                 idle_timeout,
-                accepted.connection.next(),
+                accepted.connection.accept(),
             ));
         let Some(timeout_result) = future.await else {
             break; // A graceful shutdown was initiated.
