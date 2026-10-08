@@ -132,7 +132,14 @@ impl<S: DnsTcpStream> Stream for TcpClientStream<S> {
 #[cfg(feature = "tokio")]
 impl<T> DnsTcpStream for AsyncIoTokioAsStd<T>
 where
-    T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + Sync + Sized + 'static,
+    T: std::fmt::Debug
+        + tokio::io::AsyncRead
+        + tokio::io::AsyncWrite
+        + Unpin
+        + Send
+        + Sync
+        + Sized
+        + 'static,
 {
     type Time = TokioTime;
 }

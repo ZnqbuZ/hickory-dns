@@ -5,6 +5,7 @@ use core::marker::Send;
 use core::net::SocketAddr;
 use core::pin::Pin;
 use core::time::Duration;
+use std::fmt::Debug;
 #[cfg(feature = "__quic")]
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,6 +42,7 @@ pub mod iocompat {
     use tokio::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite, ReadBuf};
 
     /// Conversion from `tokio::io::{AsyncRead, AsyncWrite}` to `std::io::{AsyncRead, AsyncWrite}`
+    #[derive(Debug)]
     pub struct AsyncIoTokioAsStd<T: TokioAsyncRead + TokioAsyncWrite>(pub T);
 
     impl<T: TokioAsyncRead + TokioAsyncWrite + Unpin> Unpin for AsyncIoTokioAsStd<T> {}
@@ -81,6 +83,7 @@ pub mod iocompat {
     }
 
     /// Conversion from `std::io::{AsyncRead, AsyncWrite}` to `tokio::io::{AsyncRead, AsyncWrite}`
+    #[derive(Debug)]
     pub struct AsyncIoStdAsTokio<T: AsyncRead + AsyncWrite>(pub T);
 
     impl<T: AsyncRead + AsyncWrite + Unpin> Unpin for AsyncIoStdAsTokio<T> {}
@@ -284,10 +287,7 @@ pub trait RuntimeProvider: Clone + Send + Sync + Unpin + 'static {
 
 /// Trait for DnsUdpSocket
 #[async_trait]
-pub trait DnsUdpSocket
-where
-    Self: Send + Sync + Sized + Unpin,
-{
+pub trait DnsUdpSocket: Debug + Send + Sync + Sized + Unpin {
     /// Time implementation used for this type
     type Time: Time;
 
@@ -336,7 +336,9 @@ pub trait QuicSocketBinder {
 }
 
 /// Trait for TCP connection
-pub trait DnsTcpStream: AsyncRead + AsyncWrite + Unpin + Send + Sync + Sized + 'static {
+pub trait DnsTcpStream:
+    Debug + AsyncRead + AsyncWrite + Unpin + Send + Sync + Sized + 'static
+{
     /// Timer type to use with this TCP stream type
     type Time: Time;
 }
