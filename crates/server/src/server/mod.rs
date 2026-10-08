@@ -5,7 +5,7 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-//! `Server` component for hosting a domain name servers operations.
+//! `Server` component for hosting domain name server operations.
 
 #[cfg(feature = "__tls")]
 use std::io;
@@ -94,8 +94,11 @@ impl<T: RequestHandler> Server<T> {
         Ok(())
     }
 
-    /// Triggers a graceful shutdown the server. All background tasks will stop accepting
-    /// new connections and the returned future will complete once all tasks have terminated.
+    /// Triggers a shutdown and waits for the registered transport tasks to finish.
+    ///
+    /// Transports stop accepting new work. Their local task sets are dropped,
+    /// cancelling the owned tasks without waiting for cancellation to complete.
+    /// Independently spawned request tasks may continue running.
     pub async fn shutdown_gracefully(&mut self) -> Result<(), NetError> {
         self.context.shutdown_token().cancel();
 
@@ -111,8 +114,10 @@ impl<T: RequestHandler> Server<T> {
         self.context.shutdown_token()
     }
 
-    /// This will run until all background tasks complete. If one or more tasks return an error,
-    /// one will be chosen as the returned error for this future.
+    /// Waits for the registered transport tasks to finish.
+    ///
+    /// If transports return errors, the last observed error is returned. A task panic
+    /// or cancellation returns an error immediately.
     pub async fn block_until_done(&mut self) -> Result<(), NetError> {
         if self.join_set.is_empty() {
             warn!("block_until_done called with no pending tasks");
@@ -839,7 +844,7 @@ mod utils {
         matches!(err.kind(), io::ErrorKind::NotConnected)
     }
 
-    /// Optionally applies a timeout to a future.
+    /// With no deadline configured, preserve the operation's own timeout and cancellation behavior.
     #[cfg(any(feature = "__https", feature = "__quic", feature = "__h3"))]
     pub(crate) async fn optional_timeout<T>(
         timeout: Option<Duration>,

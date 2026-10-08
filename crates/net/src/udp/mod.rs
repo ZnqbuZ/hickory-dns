@@ -45,6 +45,8 @@ mod udp_listener {
     };
 
     /// Receives UDP messages whose source addresses are safe for responses.
+    ///
+    /// Server-side validation lives here so client streams retain their existing receive behavior.
     pub struct UdpListener<S: DnsUdpSocket> {
         stream: UdpStream<S>,
     }

@@ -279,7 +279,6 @@ where
         Err(err) => return Err(err),
     }
 
-    // attempt to get the content length
     let mut content_length = None;
     if let Some(length) = request.headers().get(CONTENT_LENGTH) {
         let length = usize::from_str(length.to_str()?)?;

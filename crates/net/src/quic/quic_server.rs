@@ -99,14 +99,15 @@ pub(crate) mod endpoint {
     use super::IntoQuicSocket;
     use crate::{error::NetError, runtime::Accepted, utils, utils::sanitize_src_address};
 
-    /// Protocol initialization performed by an endpoint's handshake tasks.
+    /// QUIC and HTTP/3 share acceptance and task ownership but initialize different protocols.
     pub(crate) trait QuicHandshake: Sized + Send + 'static {
         /// Returns a Send future that completes protocol initialization.
         fn handshake(connecting: Connecting)
         -> impl Future<Output = Result<Self, NetError>> + Send;
     }
 
-    /// Owns an endpoint and the concurrent handshakes that produce established connections.
+    /// Keeping handshake tasks here preserves them across cancelled accept calls and cancels
+    /// them when the listener is dropped.
     pub(crate) struct QuicEndpoint<H> {
         endpoint: Endpoint,
         handshakes: JoinSet<Option<Accepted<H>>>,
@@ -176,7 +177,7 @@ pub(crate) mod endpoint {
                     incoming = self.endpoint.accept() => {
                         let incoming = incoming?;
                         let src_addr = incoming.remote_address();
-                        // Request address validation before accepting an unvalidated peer.
+                        // Require address validation before allocating connection state for a spoofable peer.
                         if !incoming.remote_address_validated() {
                             if let Err(error) = incoming.retry() {
                                 warn!(%error, "could not send retry packet");

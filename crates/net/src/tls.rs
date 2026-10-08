@@ -247,7 +247,7 @@ pub type TokioTlsClientStream<S> = tokio_rustls::client::TlsStream<AsyncIoStdAsT
 ///
 /// The returned configuration uses the safe default protocol versions and does not request client
 /// certificates. `alpn` selects the ALPN, such as `b"dot"` or `b"h2"`.
-/// For QUIC-based protocols, use `server_quic` instead.
+/// QUIC needs a TLS 1.3 configuration; use `default_quic_server_config` for those protocols.
 pub fn default_tls_server_config(
     alpn: &[u8],
     cert_resolver: Arc<dyn ResolvesServerCert>,

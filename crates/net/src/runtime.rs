@@ -41,7 +41,7 @@ pub mod iocompat {
     use futures_io::{AsyncRead, AsyncWrite};
     use tokio::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite, ReadBuf};
 
-    /// Conversion from `tokio::io::{AsyncRead, AsyncWrite}` to `std::io::{AsyncRead, AsyncWrite}`
+    /// Conversion from `tokio::io::{AsyncRead, AsyncWrite}` to `futures_io::{AsyncRead, AsyncWrite}`
     #[derive(Debug)]
     pub struct AsyncIoTokioAsStd<T: TokioAsyncRead + TokioAsyncWrite>(pub T);
 
@@ -82,7 +82,7 @@ pub mod iocompat {
         }
     }
 
-    /// Conversion from `std::io::{AsyncRead, AsyncWrite}` to `tokio::io::{AsyncRead, AsyncWrite}`
+    /// Conversion from `futures_io::{AsyncRead, AsyncWrite}` to `tokio::io::{AsyncRead, AsyncWrite}`
     #[derive(Debug)]
     pub struct AsyncIoStdAsTokio<T: AsyncRead + AsyncWrite>(pub T);
 
@@ -440,7 +440,8 @@ pub struct Accepted<C> {
     pub connection: C,
     /// The source address recorded when accepting the connection.
     ///
-    /// This is a snapshot, not a query of the connection's current remote address.
+    /// Keeping a snapshot gives all requests on a connection consistent metadata, even if
+    /// a QUIC connection later migrates to a different remote address.
     pub src_addr: SocketAddr,
 }
 

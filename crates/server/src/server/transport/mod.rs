@@ -28,8 +28,8 @@ use crate::{
 pub trait Transport: Send + 'static {
     /// Initialize the transport and return its long-running task.
     ///
-    /// Initialization errors (such as TLS certificate conversion failures or QUIC endpoint setup)
-    /// are returned immediately via `Result::Err`.
+    /// Socket adaptation and endpoint setup can fail before the server spawns a task,
+    /// so a failed registration leaves no listening task behind.
     fn into_future<H: RequestHandler>(
         self,
         context: Arc<ServerContext<H>>,
