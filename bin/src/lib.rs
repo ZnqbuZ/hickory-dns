@@ -42,6 +42,9 @@ use hickory_server::server::transport::Tcp;
 #[cfg(feature = "__tls")]
 use hickory_server::server::transport::Tls;
 
+#[cfg(feature = "__https")]
+use hickory_server::server::transport::Https;
+
 mod config;
 use config::{Config, TcpSocketConfig, UdpSocketConfig};
 
@@ -694,14 +697,13 @@ impl ServerSetup<'_> {
             }
 
             self.server
-                .register_https_listener_with_tls_config(
-                    https_listener,
-                    self.handshake_timeout,
-                    self.idle_timeout,
-                    self.request_timeout,
-                    Arc::new(tls_config),
-                    dns_hostname.map(|s| s.to_owned()),
-                    http_endpoint.to_owned(),
+                .register(
+                    Https::new(https_listener, Arc::new(tls_config))
+                        .maybe_handshake_timeout(self.handshake_timeout)
+                        .maybe_idle_timeout(self.idle_timeout)
+                        .maybe_request_timeout(self.request_timeout)
+                        .maybe_dns_hostname(dns_hostname.map(str::to_owned))
+                        .http_endpoint(http_endpoint.to_owned()),
                 )
                 .map_err(|err| format!("failed to register HTTPS listener: {err}"))?;
         }

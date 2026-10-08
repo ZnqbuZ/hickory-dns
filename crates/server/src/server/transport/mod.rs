@@ -42,3 +42,6 @@ pub use super::tcp_transport::Tcp;
 
 #[cfg(feature = "__tls")]
 pub use super::tls_transport::Tls;
+
+#[cfg(feature = "__https")]
+pub use super::h2_handler::Https;

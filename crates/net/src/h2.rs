@@ -574,3 +574,115 @@ mod tests {
         }
     }
 }
+
+mod h2_listener {
+    use core::fmt::{self, Debug};
+    use std::io;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use bytes::Bytes;
+    use rustls::ServerConfig;
+    use tokio::task::JoinSet;
+    use tokio_rustls::TlsAcceptor;
+    use tracing::{debug, warn};
+
+    use crate::runtime::iocompat::AsyncIoStdAsTokio;
+    use crate::runtime::{Accepted, DnsTcpListener};
+    use crate::tcp::TcpListener;
+    use crate::utils;
+
+    /// An established server-side HTTP/2 connection over a DNS TCP stream.
+    pub type HttpsConnection<S> =
+        h2::server::Connection<tokio_rustls::server::TlsStream<AsyncIoStdAsTokio<S>>, Bytes>;
+
+    /// Accepts TCP connections and performs concurrent TLS and HTTP/2 handshakes.
+    ///
+    /// Unfinished handshakes are aborted when the listener is dropped.
+    pub struct HttpsListener<L: DnsTcpListener> {
+        listener: TcpListener<L>,
+        tls_acceptor: TlsAcceptor,
+        handshakes: JoinSet<Option<Accepted<HttpsConnection<L::Stream>>>>,
+    }
+
+    impl<L: DnsTcpListener> Debug for HttpsListener<L> {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.debug_struct("HttpsListener")
+                .field("listener", &self.listener)
+                .field("handshakes", &self.handshakes)
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl<L: DnsTcpListener> HttpsListener<L> {
+        /// Wraps an already-bound TCP listener with the supplied TLS configuration.
+        pub fn new(listener: L, tls_config: Arc<ServerConfig>) -> Self {
+            Self {
+                listener: TcpListener::new(listener),
+                tls_acceptor: TlsAcceptor::from(tls_config),
+                handshakes: JoinSet::new(),
+            }
+        }
+
+        async fn handshake(
+            accepted: Accepted<L::Stream>,
+            tls_acceptor: TlsAcceptor,
+            timeout: Option<Duration>,
+        ) -> Option<Accepted<HttpsConnection<L::Stream>>> {
+            let src_addr = accepted.src_addr;
+            debug!("starting HTTPS request from: {src_addr}");
+
+            let tls_stream = utils::optional_timeout(
+                timeout,
+                tls_acceptor.accept(AsyncIoStdAsTokio(accepted.connection)),
+            )
+            .await
+            .inspect_err(|_| warn!("https timeout expired during handshake"))
+            .ok()?
+            .inspect_err(|error| debug!("https handshake src: {src_addr} error: {error}"))
+            .ok()?;
+
+            debug!("accepted HTTPS request from: {src_addr}");
+
+            let connection = h2::server::handshake(tls_stream)
+                .await
+                .inspect_err(|error| warn!(%src_addr, %error, "handshake error"))
+                .ok()?;
+
+            Some(Accepted {
+                connection,
+                src_addr,
+            })
+        }
+
+        /// Accepts an established HTTP/2 connection together with its recorded metadata.
+        ///
+        /// The optional timeout applies only to the TLS handshake. Failed TLS or HTTP/2
+        /// handshakes are ignored; errors from the underlying TCP listener are returned.
+        /// Cancelling this future does not cancel handshakes that have already started;
+        /// dropping the listener aborts them.
+        pub async fn accept(
+            &mut self,
+            handshake_timeout: Option<Duration>,
+        ) -> io::Result<Accepted<HttpsConnection<L::Stream>>> {
+            loop {
+                tokio::select! {
+                    result = self.listener.accept() => {
+                        self.handshakes.spawn(Self::handshake(
+                            result?,
+                            self.tls_acceptor.clone(),
+                            handshake_timeout,
+                        ));
+                    }
+                    Some(result) = self.handshakes.join_next() => {
+                        if let Ok(Some(connection)) = result {
+                            return Ok(connection);
+                        };
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub use h2_listener::{HttpsConnection, HttpsListener};
