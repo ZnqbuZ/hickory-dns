@@ -817,7 +817,6 @@ impl DecayingSrtt {
     /// current SRTT value and the `last_update` timestamp.
     fn update(&self, default: u32, update_fn: impl Fn(u32, Instant) -> u32) {
         let last_update = self.last_update.lock().replace(Instant::now());
-        #[expect(deprecated)]
         let _ = self.srtt_microseconds.fetch_update(
             Ordering::SeqCst,
             Ordering::SeqCst,
