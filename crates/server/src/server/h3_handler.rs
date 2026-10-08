@@ -5,158 +5,180 @@
 // https://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use std::{net::SocketAddr, sync::Arc, task::Context, time::Duration};
+use std::{future::Future, sync::Arc, task::Context, time::Duration};
 
 use bytes::{Buf, Bytes};
 use h3::server::RequestStream;
 use h3_quinn::BidiStream;
-use rustls::server::ResolvesServerCert;
-use tokio::{net, task::JoinSet};
+use rustls::{ServerConfig, server::ResolvesServerCert};
+use tokio::task::JoinSet;
 use tracing::{debug, warn};
 
-use super::{
-    ResponseInfo, ServerContext, reap_tasks, request_handler::RequestHandler,
-    response_handler::ResponseHandler, sanitize_src_address,
-};
+use super::Transport;
 use crate::{
     net::{
         NetError,
-        h3::{
-            BodyStream,
-            h3_server::{H3Connection, H3Server},
-        },
+        h3::{BodyStream, H3Connection, H3Server},
         http::{self, Version, fetch_body},
+        quic::IntoQuicSocket,
+        runtime::Accepted,
+        tls as tls_config,
         xfer::Protocol,
     },
     proto::rr::Record,
-    server::optional_timeout,
+    server::{
+        ResponseInfo, ServerContext,
+        request_handler::RequestHandler,
+        response_handler::ResponseHandler,
+        utils::{self, reap_tasks},
+    },
     zone_handler::MessageResponse,
 };
 
-pub(super) async fn handle_h3(
-    socket: net::UdpSocket,
+/// Builder and transport implementation for DNS-over-HTTP/3 (DoH3).
+///
+/// Wraps an already-bound UDP socket and a TLS configuration to accept HTTP/3 connections.
+pub struct H3<S> {
+    socket: S,
+    tls_config: Arc<ServerConfig>,
     handshake_timeout: Option<Duration>,
     idle_timeout: Option<Duration>,
     request_timeout: Option<Duration>,
-    server_cert_resolver: Arc<dyn ResolvesServerCert>,
-    dns_hostname: Option<String>,
-    cx: Arc<ServerContext<impl RequestHandler>>,
-) -> Result<(), NetError> {
-    debug!("registered h3: {:?}", socket);
-    handle_h3_with_server(
-        H3Server::with_socket(socket, server_cert_resolver)?,
-        handshake_timeout,
-        idle_timeout,
-        request_timeout,
-        dns_hostname,
-        cx,
-    )
-    .await
 }
 
-pub(super) async fn handle_h3_with_server(
-    mut server: H3Server,
-    handshake_timeout: Option<Duration>,
-    idle_timeout: Option<Duration>,
-    request_timeout: Option<Duration>,
-    dns_hostname: Option<String>,
-    cx: Arc<ServerContext<impl RequestHandler>>,
-) -> Result<(), NetError> {
-    let dns_hostname = dns_hostname.map(|n| n.into());
-
-    let mut inner_join_set = JoinSet::new();
-    loop {
-        let future = cx.shutdown.run_until_cancelled(server.accept());
-        let Some(incoming_opt) = future.await else {
-            break; // A graceful shutdown was initiated. Break out of the loop.
-        };
-        let Some(incoming) = incoming_opt else {
-            break; // Connection is closed.
-        };
-
-        // If the remote address isn't validated, send a retry packet to request that the client try
-        // connecting again, with address validation.
-        if !incoming.remote_address_validated() {
-            if let Err(error) = incoming.retry() {
-                warn!(%error, "could not send retry packet");
-            }
-            continue;
+impl<S> H3<S> {
+    /// Constructs a new HTTP/3 transport with the provided [`ServerConfig`].
+    ///
+    /// The `socket` must be already bound to the desired local address, and the configuration
+    /// must enable the H3 ALPN protocol. Default timeouts are `None`.
+    pub fn new(socket: S, tls_config: Arc<ServerConfig>) -> Self {
+        Self {
+            socket,
+            tls_config,
+            handshake_timeout: None,
+            idle_timeout: None,
+            request_timeout: None,
         }
-
-        // Verify that the source address is safe for responses.
-        let src_addr = incoming.remote_address();
-        if let Err(error) = sanitize_src_address(src_addr) {
-            warn!(
-                %error, %src_addr,
-                "address can not be responded to",
-            );
-            continue;
-        }
-
-        let connecting = match incoming.accept() {
-            Ok(connecting) => connecting,
-            Err(error) => {
-                debug!(%error, "error accepting incoming h3 connection");
-                continue;
-            }
-        };
-
-        let cx = cx.clone();
-        let dns_hostname = dns_hostname.clone();
-        inner_join_set.spawn(async move {
-            let handshake_future = H3Connection::new(connecting);
-            let Ok(connection_result) = optional_timeout(handshake_timeout, handshake_future).await
-            else {
-                warn!("h3 timeout expired during handshake");
-                return;
-            };
-            let connection = match connection_result {
-                Ok(connection) => connection,
-                Err(error) => {
-                    debug!(%error, "error establishing incoming h3 connection");
-                    return;
-                }
-            };
-
-            debug!("starting h3 stream request from: {src_addr}");
-
-            let result = h3_handler(
-                connection,
-                src_addr,
-                idle_timeout,
-                request_timeout,
-                dns_hostname,
-                cx,
-            )
-            .await;
-
-            if let Err(error) = result {
-                warn!(%error, %src_addr, "h3 stream processing failed")
-            }
-        });
-
-        reap_tasks(&mut inner_join_set);
     }
 
-    Ok(())
+    /// Constructs a new HTTP/3 transport with a certificate resolver.
+    ///
+    /// A default TLS 1.3 configuration with ALPN `h3` is constructed immediately.
+    pub fn from_cert_resolver(socket: S, cert_resolver: Arc<dyn ResolvesServerCert>) -> Self {
+        let config = tls_config::default_quic_server_config(b"h3", cert_resolver);
+        Self::new(socket, config.into())
+    }
+
+    /// Sets the timeout for the QUIC handshake and HTTP/3 initialization together.
+    pub fn handshake_timeout(self, handshake_timeout: Duration) -> Self {
+        self.maybe_handshake_timeout(Some(handshake_timeout))
+    }
+
+    /// Sets the handshake timeout; pass `None` to disable it.
+    pub fn maybe_handshake_timeout(self, handshake_timeout: Option<Duration>) -> Self {
+        Self {
+            handshake_timeout,
+            ..self
+        }
+    }
+
+    /// Sets the timeout before closing an idle connection.
+    pub fn idle_timeout(self, idle_timeout: Duration) -> Self {
+        self.maybe_idle_timeout(Some(idle_timeout))
+    }
+
+    /// Sets the idle timeout; pass `None` to disable it.
+    pub fn maybe_idle_timeout(self, idle_timeout: Option<Duration>) -> Self {
+        Self {
+            idle_timeout,
+            ..self
+        }
+    }
+
+    /// Sets the timeout for receiving a complete request over a stream.
+    pub fn request_timeout(self, request_timeout: Duration) -> Self {
+        self.maybe_request_timeout(Some(request_timeout))
+    }
+
+    /// Sets the request timeout; pass `None` to disable it.
+    pub fn maybe_request_timeout(self, request_timeout: Option<Duration>) -> Self {
+        Self {
+            request_timeout,
+            ..self
+        }
+    }
 }
 
-pub(crate) async fn h3_handler(
-    mut connection: H3Connection,
-    src_addr: SocketAddr,
+impl<S> Transport for H3<S>
+where
+    S: IntoQuicSocket + Send + 'static,
+{
+    fn into_future<H: RequestHandler>(
+        self,
+        cx: Arc<ServerContext<H>>,
+    ) -> Result<impl Future<Output = Result<(), NetError>> + Send + 'static, NetError> {
+        let mut listener = H3Server::with_socket_and_tls_config(self.socket, self.tls_config)?;
+
+        Ok(async move {
+            let mut inner_join_set = JoinSet::new();
+            loop {
+                let future = cx
+                    .shutdown_token()
+                    .run_until_cancelled(listener.accept(self.handshake_timeout));
+                let Some(connection_opt) = future.await else {
+                    break; // A graceful shutdown was initiated. Break out of the loop.
+                };
+                let Some(connection_result) = connection_opt else {
+                    break; // Connection is closed.
+                };
+                let connection = match connection_result {
+                    Ok(connection) => connection,
+                    Err(error) => {
+                        debug!(%error, "error accepting incoming h3 connection");
+                        continue;
+                    }
+                };
+
+                let cx = cx.clone();
+                inner_join_set.spawn(async move {
+                    let src_addr = connection.src_addr;
+                    debug!("starting h3 stream request from: {src_addr}");
+
+                    let result =
+                        inner_h3_handler(connection, self.idle_timeout, self.request_timeout, cx)
+                            .await;
+
+                    if let Err(error) = result {
+                        warn!(%error, %src_addr, "h3 stream processing failed")
+                    }
+                });
+
+                reap_tasks(&mut inner_join_set);
+            }
+
+            Ok(())
+        })
+    }
+}
+
+async fn inner_h3_handler(
+    mut accepted: Accepted<H3Connection>,
     idle_timeout: Option<Duration>,
     request_timeout: Option<Duration>,
-    _dns_hostname: Option<Arc<str>>,
     cx: Arc<ServerContext<impl RequestHandler>>,
 ) -> Result<(), NetError> {
+    let src_addr = accepted.src_addr;
     // TODO: we should make this configurable
     let mut max_requests = 100u32;
 
     // Accept all inbound requests sent over the connection.
     loop {
         let future = cx
-            .shutdown
-            .run_until_cancelled(optional_timeout(idle_timeout, connection.accept()));
+            .shutdown_token()
+            .run_until_cancelled(utils::optional_timeout(
+                idle_timeout,
+                accepted.connection.accept(),
+            ));
         let Some(timeout_result) = future.await else {
             break; // A graceful shutdown was initiated.
         };
@@ -188,7 +210,8 @@ pub(crate) async fn h3_handler(
                 BodyStream::from(|cx: &mut Context<'_>| stream.poll_recv_data(cx)),
                 None,
             );
-            let Ok(request_res) = optional_timeout(request_timeout, fetch_future).await else {
+            let Ok(request_res) = utils::optional_timeout(request_timeout, fetch_future).await
+            else {
                 return; //Timeout while reading request.
             };
             let request = match request_res {
@@ -213,7 +236,7 @@ pub(crate) async fn h3_handler(
         max_requests -= 1;
         if max_requests == 0 {
             warn!("exceeded request count, shutting down h3 conn: {src_addr}");
-            connection.shutdown().await?;
+            accepted.connection.shutdown().await?;
             break;
         }
         // we'll continue handling requests from here.

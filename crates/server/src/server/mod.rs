@@ -7,32 +7,22 @@
 
 //! `Server` component for hosting a domain name servers operations.
 
-#[cfg(feature = "__h3")]
-use std::future::Future;
 #[cfg(feature = "__tls")]
 use std::io;
-#[cfg(any(test, feature = "__h3"))]
+#[cfg(test)]
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-#[cfg(feature = "__h3")]
-use std::time::Duration;
 use std::{fmt, net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
 use ipnet::IpNet;
 #[cfg(feature = "__tls")]
 use rustls::{ServerConfig, server::ResolvesServerCert};
-#[cfg(feature = "__h3")]
-use tokio::net;
 use tokio::task::JoinSet;
-#[cfg(feature = "__h3")]
-use tokio::time::{error::Elapsed, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 #[cfg(feature = "metrics")]
 use crate::metrics::ResponseHandlerMetrics;
-#[cfg(feature = "__h3")]
-use crate::net::h3::h3_server::H3Server;
 #[cfg(feature = "__tls")]
 use crate::net::tls::default_provider;
 use crate::{
@@ -104,77 +94,6 @@ impl<T: RequestHandler> Server<T> {
         Ok(())
     }
 
-    /// Register a UdpSocket to the Server for supporting DoH3 (DNS-over-HTTP/3). The UdpSocket should already be bound to either an
-    /// IPv6 or an IPv4 address.
-    ///
-    /// To make the server more resilient to DOS issues, there is a timeout. Care should be taken
-    ///  to not make this too low depending on use cases.
-    ///
-    /// # Arguments
-    /// * `listener` - a bound TCP (needs to be on a different port from standard TCP connections) socket
-    /// * `handshake_timeout` - timeout for performing QUIC handshakes
-    /// * `idle_timeout` - timeout before closing an idle connection
-    /// * `request_timeout` - timeout for receiving a complete request over a stream
-    /// * `server_cert_resolver` - resolver for certificate and key used to announce to clients
-    #[cfg(feature = "__h3")]
-    pub fn register_h3_listener(
-        &mut self,
-        socket: net::UdpSocket,
-        handshake_timeout: Option<Duration>,
-        idle_timeout: Option<Duration>,
-        request_timeout: Option<Duration>,
-        server_cert_resolver: Arc<dyn ResolvesServerCert>,
-        dns_hostname: Option<String>,
-    ) -> io::Result<()> {
-        self.join_set.spawn(h3_handler::handle_h3(
-            socket,
-            handshake_timeout,
-            idle_timeout,
-            request_timeout,
-            server_cert_resolver,
-            dns_hostname,
-            self.context.clone(),
-        ));
-        Ok(())
-    }
-
-    /// Register a UdpSocket for supporting DoH3 (DNS-over-HTTP/3) with the specified TLS config.
-    ///
-    /// The UdpSocket should already be bound to either an IPv6 or an IPv4 address.
-    ///
-    /// The TLS `ServerConfig` should be configured with TLS 1.3 support and the DoH3 ALPN protocol
-    /// enabled.
-    ///
-    /// To make the server more resilient to DOS issues, there is a timeout. Care should be taken
-    ///  to not make this too low depending on use cases.
-    ///
-    /// # Arguments
-    /// * `listener` - a bound TCP (needs to be on a different port from standard TCP connections) socket
-    /// * `handshake_timeout` - timeout for performing QUIC handshakes
-    /// * `idle_timeout` - timeout before closing an idle connection
-    /// * `request_timeout` - timeout for receiving a complete request over a stream
-    /// * `tls_config` - a customized ServerConfig to use for TLS.
-    #[cfg(feature = "__h3")]
-    pub fn register_h3_listener_with_tls_config(
-        &mut self,
-        socket: net::UdpSocket,
-        handshake_timeout: Option<Duration>,
-        idle_timeout: Option<Duration>,
-        request_timeout: Option<Duration>,
-        tls_config: Arc<ServerConfig>,
-        dns_hostname: Option<String>,
-    ) -> Result<(), NetError> {
-        self.join_set.spawn(h3_handler::handle_h3_with_server(
-            H3Server::with_socket_and_tls_config(socket, tls_config)?,
-            handshake_timeout,
-            idle_timeout,
-            request_timeout,
-            dns_hostname,
-            self.context.clone(),
-        ));
-        Ok(())
-    }
-
     /// Triggers a graceful shutdown the server. All background tasks will stop accepting
     /// new connections and the returned future will complete once all tasks have terminated.
     pub async fn shutdown_gracefully(&mut self) -> Result<(), NetError> {
@@ -213,6 +132,7 @@ impl<T: RequestHandler> Server<T> {
     }
 }
 
+#[cfg(test)]
 #[cfg(any(test, feature = "__h3"))]
 fn reap_tasks(join_set: &mut JoinSet<()>) {
     while join_set.try_join_next().is_some() {}
@@ -544,6 +464,7 @@ impl<R: ResponseHandler> ResponseHandler for ReportingResponseHandler<R> {
     }
 }
 
+#[cfg(test)]
 #[cfg(any(test, feature = "__h3"))]
 fn sanitize_src_address(src: SocketAddr) -> Result<(), String> {
     // currently checks that the src address aren't either the undefined IPv4 or IPv6 address, and not port 0.
@@ -580,22 +501,6 @@ fn sanitize_src_address(src: SocketAddr) -> Result<(), String> {
     }
 }
 
-#[cfg(any())]
-fn is_unrecoverable_socket_error(err: &io::Error) -> bool {
-    matches!(err.kind(), io::ErrorKind::NotConnected)
-}
-
-#[cfg(feature = "__h3")]
-async fn optional_timeout<T>(
-    timeout_opt: Option<Duration>,
-    future: impl Future<Output = T>,
-) -> Result<T, Elapsed> {
-    match timeout_opt {
-        Some(timeout_duration) => timeout(timeout_duration, future).await,
-        None => Ok(future.await),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
@@ -611,6 +516,8 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
+    #[cfg(feature = "__h3")]
+    use crate::server::transport::H3;
     #[cfg(feature = "__https")]
     use crate::server::transport::Https;
     #[cfg(feature = "__quic")]
@@ -776,16 +683,12 @@ mod tests {
             #[cfg(feature = "__h3")]
             {
                 let cert_key = rustls_cert_key();
-                server
-                    .register_h3_listener(
-                        UdpSocket::bind(self.h3_addr).await.unwrap(),
-                        Some(Duration::from_secs(1)),
-                        Some(Duration::from_secs(1)),
-                        Some(Duration::from_secs(1)),
-                        cert_key,
-                        None,
-                    )
-                    .unwrap();
+                let h3 =
+                    H3::from_cert_resolver(UdpSocket::bind(self.h3_addr).await.unwrap(), cert_key)
+                        .handshake_timeout(Duration::from_secs(1))
+                        .idle_timeout(Duration::from_secs(1))
+                        .request_timeout(Duration::from_secs(1));
+                server.register(h3).unwrap();
             }
         }
 
@@ -836,7 +739,7 @@ mod utils {
     //! Helpers shared by the server request pipeline and the transports.
 
     use std::io;
-    #[cfg(any(feature = "__https", feature = "__quic"))]
+    #[cfg(any(feature = "__https", feature = "__quic", feature = "__h3"))]
     use std::{future::Future, time::Duration};
 
     use tokio::task::JoinSet;
@@ -852,7 +755,7 @@ mod utils {
     }
 
     /// Optionally applies a timeout to a future.
-    #[cfg(any(feature = "__https", feature = "__quic"))]
+    #[cfg(any(feature = "__https", feature = "__quic", feature = "__h3"))]
     pub(crate) async fn optional_timeout<T>(
         timeout: Option<Duration>,
         future: impl Future<Output = T>,

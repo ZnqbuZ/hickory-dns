@@ -76,3 +76,9 @@ where
         Self(stream)
     }
 }
+
+pub use h3_server::{H3Connection, H3Server};
+
+fn endpoint() -> quinn::EndpointConfig {
+    quinn::EndpointConfig::default()
+}

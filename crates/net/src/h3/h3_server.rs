@@ -10,85 +10,77 @@
 use core::net::SocketAddr;
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 
+use crate::tls as tls_config;
+use crate::{
+    error::NetError,
+    quic::{
+        IntoQuicSocket,
+        quic_server::endpoint::{QuicEndpoint, QuicHandshake},
+    },
+    runtime::Accepted,
+};
 use bytes::Bytes;
 use h3::server::{Connection, RequestResolver};
-use h3_quinn::Endpoint;
-use quinn::crypto::rustls::QuicServerConfig;
-use quinn::{Connecting, EndpointConfig, Incoming, ServerConfig};
+use quinn::Connecting;
 use rustls::server::ResolvesServerCert;
 use rustls::server::ServerConfig as TlsServerConfig;
-use rustls::version::TLS13;
+use tokio::net::UdpSocket;
 
-use crate::{error::NetError, tls::default_provider, udp::UdpSocket};
-
-use super::ALPN_H3;
-
-/// A DNS-over-HTTP/3 Server, see H3ClientStream for the client counterpart
+/// A listener for established DNS-over-HTTP/3 connections.
+#[derive(Debug)]
 pub struct H3Server {
-    endpoint: Endpoint,
+    endpoint: QuicEndpoint<H3Connection>,
 }
 
 impl H3Server {
-    /// Construct the new Acceptor with the associated pkcs12 data
+    /// Binds a UDP socket and constructs a listener with a default TLS configuration.
     pub async fn new(
         name_server: SocketAddr,
-        server_cert_resolver: Arc<dyn ResolvesServerCert>,
+        cert_resolver: Arc<dyn ResolvesServerCert>,
     ) -> Result<Self, NetError> {
-        // setup a new socket for the server to use
-        let socket = <tokio::net::UdpSocket as UdpSocket>::bind(name_server).await?;
-        Self::with_socket(socket, server_cert_resolver)
+        Self::with_socket(UdpSocket::bind(name_server).await?, cert_resolver)
     }
 
-    /// Construct the new server with an existing socket and default TLS config.
+    /// Constructs a listener with an existing socket and a default TLS configuration.
     pub fn with_socket(
-        socket: tokio::net::UdpSocket,
-        server_cert_resolver: Arc<dyn ResolvesServerCert>,
+        socket: impl IntoQuicSocket,
+        cert_resolver: Arc<dyn ResolvesServerCert>,
     ) -> Result<Self, NetError> {
-        let mut config = TlsServerConfig::builder_with_provider(Arc::new(default_provider()))
-            .with_protocol_versions(&[&TLS13])
-            .expect("TLS1.3 not supported")
-            .with_no_client_auth()
-            .with_cert_resolver(server_cert_resolver);
-
-        config.alpn_protocols = vec![ALPN_H3.to_vec()];
-
+        let config = tls_config::default_quic_server_config(b"h3", cert_resolver);
         Self::with_socket_and_tls_config(socket, Arc::new(config))
     }
 
-    /// Construct the new server with an existing socket and custom TLS config.
+    /// Constructs a listener with an existing socket and a custom TLS configuration.
     ///
     /// The TLS configuration should support TLS 1.3 and have the H3 ALPN protocol enabled.
     pub fn with_socket_and_tls_config(
-        socket: tokio::net::UdpSocket,
+        socket: impl IntoQuicSocket,
         tls_config: Arc<TlsServerConfig>,
     ) -> Result<Self, NetError> {
-        let mut server_config =
-            ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(tls_config).unwrap()));
-        server_config.transport = Arc::new(super::transport());
-
-        let socket = socket.into_std()?;
-
-        let endpoint = Endpoint::new(
-            EndpointConfig::default(),
-            Some(server_config),
-            socket,
-            Arc::new(quinn::TokioRuntime),
-        )?;
+        let endpoint =
+            QuicEndpoint::new(socket, tls_config, super::endpoint(), super::transport())?;
 
         Ok(Self { endpoint })
     }
 
-    /// Accept the next incoming connection.
+    /// Accept the next connection and its recorded metadata after its QUIC and HTTP/3 handshakes.
     ///
-    /// # Returns
+    /// Handshakes run concurrently. The timeout covers both protocol initialization steps.
+    /// Handshake failures are logged and skipped; synchronous accept errors are returned.
+    /// Dropping the listener aborts pending handshakes without waiting for them to finish.
     ///
-    /// A remote connection that could accept many potential requests and the remote socket address
-    pub async fn accept(&mut self) -> Option<Incoming> {
-        self.endpoint.accept().await
+    /// Cancelling this future leaves already-started handshakes owned by the listener.
+    /// A subsequent call can receive their completed connections.
+    pub async fn accept(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> Option<Result<Accepted<H3Connection>, NetError>> {
+        self.endpoint.accept(timeout).await
     }
 
-    /// Returns the address this server is listening on
+    /// Returns the address this listener is listening on.
     ///
     /// This can be useful in tests, where a random port can be associated with the server by binding on `127.0.0.1:0` and then getting the
     ///   associated port address with this function.
@@ -97,23 +89,12 @@ impl H3Server {
     }
 }
 
-/// A HTTP/3 connection.
+/// An HTTP/3 connection.
 pub struct H3Connection {
     connection: Connection<h3_quinn::Connection, Bytes>,
 }
 
 impl H3Connection {
-    /// Complete a QUIC handshake and set up an HTTP/3 connection.
-    pub async fn new(connecting: Connecting) -> Result<Self, NetError> {
-        let quinn_connection = connecting.await?;
-        let h3_quinn_connection = h3_quinn::Connection::new(quinn_connection);
-        let h3_connection = Connection::new(h3_quinn_connection)
-            .await
-            .map_err(|e| NetError::from(format!("h3 connection failed: {e}")))?;
-        Ok(Self {
-            connection: h3_connection,
-        })
-    }
     /// Accept the next request from the client
     pub async fn accept(
         &mut self,
@@ -130,5 +111,14 @@ impl H3Connection {
             .shutdown(0)
             .await
             .map_err(|e| NetError::from(format!("h3 connection shutdown failed: {e}")))
+    }
+}
+
+impl QuicHandshake for H3Connection {
+    async fn handshake(connecting: Connecting) -> Result<Self, NetError> {
+        let connection = Connection::new(h3_quinn::Connection::new(connecting.await?))
+            .await
+            .map_err(|e| NetError::from(format!("h3 connection failed: {e}")))?;
+        Ok(Self { connection })
     }
 }

@@ -48,3 +48,6 @@ pub use super::h2_handler::Https;
 
 #[cfg(feature = "__quic")]
 pub use super::quic_handler::Quic;
+
+#[cfg(feature = "__h3")]
+pub use super::h3_handler::H3;
