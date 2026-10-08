@@ -32,11 +32,25 @@ use tracing::{error, info};
 use hickory_server::proto::ProtoError;
 use hickory_server::proto::rr::rdata::opt::NSIDPayload;
 #[cfg(feature = "__tls")]
-use hickory_server::server::default_tls_server_config;
-use hickory_server::{server::Server, zone_handler::Catalog};
+use hickory_server::server::tls_config;
+#[cfg(feature = "__https")]
+use hickory_server::server::transport::Https;
+#[cfg(feature = "__quic")]
+use hickory_server::server::transport::Quic;
+#[cfg(feature = "__tls")]
+use hickory_server::server::transport::Tls;
+use hickory_server::{
+    server::{
+        Server,
+        transport::{Tcp, Udp},
+    },
+    zone_handler::Catalog,
+};
 
 mod config;
 use config::{Config, TcpSocketConfig, UdpSocketConfig};
+#[cfg(feature = "__tls")]
+use hickory_net::tls::alpn;
 
 #[cfg(feature = "__dnssec")]
 pub mod dnssec;
@@ -555,15 +569,19 @@ impl ServerSetup<'_> {
             let bound_addr = first_socket
                 .local_addr()
                 .map_err(|err| format!("failed to lookup local address: {err}"))?;
-            self.server.register_socket(first_socket);
+            self.server
+                .register(Udp::new(first_socket))
+                .map_err(|err| format!("failed to register UDP socket: {err}"))?;
 
             // Afterward, bind any additional sockets.
             for _ in 1..num_sockets {
-                self.server.register_socket(
-                    build_udp_socket(*addr, port, self.udp_socket_config).map_err(|err| {
-                        format!("failed to bind to UDP socket address {addr:?}: {err}")
-                    })?,
-                );
+                self.server
+                    .register(Udp::new(
+                        build_udp_socket(*addr, port, self.udp_socket_config).map_err(|err| {
+                            format!("failed to bind to UDP socket address {addr:?}: {err}")
+                        })?,
+                    ))
+                    .map_err(|err| format!("failed to register UDP socket: {err}"))?;
             }
 
             info!("listening for UDP on {bound_addr:?}");
@@ -586,11 +604,13 @@ impl ServerSetup<'_> {
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
 
-            self.server.register_listener(
-                tcp_listener,
-                self.stream_timeout(),
-                self.tcp_socket_config.response_buffer_size,
-            );
+            self.server
+                .register(
+                    Tcp::new(tcp_listener)
+                        .maybe_stream_timeout(self.stream_timeout())
+                        .response_buffer_size(self.tcp_socket_config.response_buffer_size),
+                )
+                .map_err(|err| format!("failed to register TCP listener: {err}"))?;
         }
 
         Ok(())
@@ -629,7 +649,7 @@ impl ServerSetup<'_> {
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
 
-            let mut tls_config = default_tls_server_config(b"dot", cert_resolver.clone())
+            let mut tls_config = tls_config::server_tcp(alpn::DOT, cert_resolver.clone())
                 .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
                 warn!("DoT SSL_KEYLOG_FILE support enabled");
@@ -637,11 +657,10 @@ impl ServerSetup<'_> {
             }
 
             self.server
-                .register_tls_listener_with_tls_config(
-                    tls_listener,
-                    self.handshake_timeout,
-                    self.stream_timeout(),
-                    Arc::new(tls_config),
+                .register(
+                    Tls::new(tls_listener, Arc::new(tls_config))
+                        .maybe_handshake_timeout(self.handshake_timeout)
+                        .maybe_stream_timeout(self.stream_timeout()),
                 )
                 .map_err(|err| format!("failed to register TLS listener: {err}"))?;
         }
@@ -672,7 +691,7 @@ impl ServerSetup<'_> {
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
 
-            let mut tls_config = default_tls_server_config(b"h2", cert_resolver.clone())
+            let mut tls_config = tls_config::server_tcp(alpn::H2, cert_resolver.clone())
                 .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
                 warn!("DoH SSL_KEYLOG_FILE support enabled");
@@ -680,14 +699,13 @@ impl ServerSetup<'_> {
             }
 
             self.server
-                .register_https_listener_with_tls_config(
-                    https_listener,
-                    self.handshake_timeout,
-                    self.idle_timeout,
-                    self.request_timeout,
-                    Arc::new(tls_config),
-                    dns_hostname.map(|s| s.to_owned()),
-                    http_endpoint.to_owned(),
+                .register(
+                    Https::new(https_listener, Arc::new(tls_config))
+                        .maybe_handshake_timeout(self.handshake_timeout)
+                        .maybe_idle_timeout(self.idle_timeout)
+                        .maybe_request_timeout(self.request_timeout)
+                        .maybe_dns_hostname(dns_hostname.map(str::to_owned))
+                        .http_endpoint(http_endpoint.to_owned()),
                 )
                 .map_err(|err| format!("failed to register HTTPS listener: {err}"))?;
         }
@@ -714,7 +732,7 @@ impl ServerSetup<'_> {
                     .map_err(|err| format!("failed to lookup local address: {err}"))?
             );
 
-            let mut tls_config = default_tls_server_config(b"doq", cert_resolver.clone())
+            let mut tls_config = tls_config::server_tcp(alpn::DOQ, cert_resolver.clone())
                 .map_err(|err| format!("failed to build default TLS config: {err}"))?;
             if self.ssl_keylog_enabled {
                 warn!("DoQ SSL_KEYLOG_FILE support enabled");
@@ -722,12 +740,11 @@ impl ServerSetup<'_> {
             }
 
             self.server
-                .register_quic_listener_and_tls_config(
-                    quic_listener,
-                    self.handshake_timeout,
-                    self.idle_timeout,
-                    self.request_timeout,
-                    Arc::new(tls_config),
+                .register(
+                    Quic::new(quic_listener, Arc::new(tls_config))
+                        .maybe_handshake_timeout(self.handshake_timeout)
+                        .maybe_idle_timeout(self.idle_timeout)
+                        .maybe_request_timeout(self.request_timeout),
                 )
                 .map_err(|err| format!("failed to register QUIC listener: {err}"))?;
         }

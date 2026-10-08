@@ -1,6 +1,7 @@
 use std::{
     cmp,
     collections::{HashMap, VecDeque},
+    fmt::{self, Debug, Formatter},
     future::{Future, ready},
     io,
     io::Write,
@@ -15,7 +16,7 @@ use bytes::Buf;
 use futures_util::{AsyncRead, AsyncWrite};
 use hickory_net::{
     runtime::{DnsTcpStream, DnsUdpSocket, RuntimeProvider, TokioHandle, TokioTime},
-    tls::default_provider,
+    tls::tls_config,
     xfer::Protocol,
 };
 use hickory_proto::{
@@ -376,6 +377,16 @@ pub struct MockUdpSocket {
     queries: MockQueryCache,
 }
 
+impl Debug for MockUdpSocket {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MockUdpSocket")
+            .field("inner", &self.inner)
+            .field("queries", &self.queries)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
 pub struct MockUdpSocketInner {
     /// Response messages ready to be returned to the client.
     incoming_datagrams: VecDeque<(Message, SocketAddr)>,
@@ -459,6 +470,17 @@ pub struct MockTcpStream {
     queries: MockQueryCache,
 }
 
+impl Debug for MockTcpStream {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MockTcpStream")
+            .field("inner", &self.inner)
+            .field("destination", &self.destination)
+            .field("queries", &self.queries)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug)]
 struct MockTcpStreamInner {
     /// Buffered stream data, from the client to the mocked server.
     ///
@@ -585,7 +607,7 @@ impl AsyncWrite for MockTcpStream {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct MockQueryCache(Arc<Mutex<HashMap<IpAddr, Vec<Query>>>>);
 
 impl MockQueryCache {
@@ -699,6 +721,6 @@ impl TestCertificates {
     pub fn certified_key(&self) -> CertifiedKey {
         let cert_chain = Vec::from([self.leaf.der().to_owned(), self.ca.der().to_owned()]);
         let private_key_der = PrivatePkcs8KeyDer::from(self.key.serialize_der());
-        CertifiedKey::from_der(cert_chain, private_key_der.into(), &default_provider()).unwrap()
+        CertifiedKey::from_der(cert_chain, private_key_der.into(), &tls_config::provider()).unwrap()
     }
 }
