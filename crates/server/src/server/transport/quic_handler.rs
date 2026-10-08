@@ -7,18 +7,13 @@
 
 use std::{future::Future, sync::Arc, time::Duration};
 
-use bytes::Bytes;
-use rustls::{ServerConfig, server::ResolvesServerCert};
-use tokio::task::JoinSet;
-use tracing::{debug, warn};
-
 use super::Transport;
 use crate::{
     net::{
         NetError,
         quic::{IntoQuicSocket, QuicServer, QuicStream, QuicStreams},
         runtime::Accepted,
-        tls as tls_config,
+        tls::{alpn, tls_config},
         xfer::Protocol,
     },
     proto::rr::Record,
@@ -30,6 +25,10 @@ use crate::{
     },
     zone_handler::MessageResponse,
 };
+use bytes::Bytes;
+use rustls::{ServerConfig, server::ResolvesServerCert};
+use tokio::task::JoinSet;
+use tracing::{debug, warn};
 
 /// Builder and transport implementation for DNS-over-QUIC (DoQ).
 ///
@@ -260,5 +259,3 @@ impl ResponseHandler for QuicResponseHandle {
         Ok(info)
     }
 }
-
-use crate::net::tls::alpn;

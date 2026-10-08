@@ -7,13 +7,6 @@
 
 use std::{future::Future, sync::Arc, task::Context, time::Duration};
 
-use bytes::{Buf, Bytes};
-use h3::server::RequestStream;
-use h3_quinn::BidiStream;
-use rustls::{ServerConfig, server::ResolvesServerCert};
-use tokio::task::JoinSet;
-use tracing::{debug, warn};
-
 use super::Transport;
 use crate::{
     net::{
@@ -22,7 +15,7 @@ use crate::{
         http::{self, Version, fetch_body},
         quic::IntoQuicSocket,
         runtime::Accepted,
-        tls as tls_config,
+        tls::{alpn, tls_config},
         xfer::Protocol,
     },
     proto::rr::Record,
@@ -34,6 +27,12 @@ use crate::{
     },
     zone_handler::MessageResponse,
 };
+use bytes::{Buf, Bytes};
+use h3::server::RequestStream;
+use h3_quinn::BidiStream;
+use rustls::{ServerConfig, server::ResolvesServerCert};
+use tokio::task::JoinSet;
+use tracing::{debug, warn};
 
 /// Builder and transport implementation for DNS-over-HTTP/3 (DoH3).
 ///
@@ -273,5 +272,3 @@ impl ResponseHandler for H3ResponseHandle {
         Ok(info)
     }
 }
-
-use crate::net::tls::alpn;

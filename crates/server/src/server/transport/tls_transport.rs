@@ -15,7 +15,10 @@ use tracing::debug;
 use super::Transport;
 use crate::{
     net::{
-        NetError, runtime::DnsTcpListener, tcp::TcpStream, tls as tls_config, tls::TlsListener,
+        NetError,
+        runtime::DnsTcpListener,
+        tcp::TcpStream,
+        tls::{TlsListener, alpn, tls_config},
         xfer::Protocol,
     },
     server::{
@@ -168,5 +171,3 @@ impl<L: DnsTcpListener> Transport for Tls<L> {
         })
     }
 }
-
-use crate::net::tls::alpn;

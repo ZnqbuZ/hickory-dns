@@ -22,18 +22,17 @@ use quinn::{
 };
 use tokio::time::timeout;
 
+use crate::tls::alpn;
 use crate::{
     error::NetError,
     proto::op::{DnsRequest, DnsResponse},
+    quic::quic_config,
     quic::quic_stream::{DoqErrorCode, QuicStream},
     runtime::{RuntimeProvider, Spawn},
-    tls::client_config,
+    tls::tls_config,
     udp::UdpSocket,
     xfer::{CONNECT_TIMEOUT, DnsExchange, DnsRequestSender, DnsResponseStream},
 };
-
-use super::quic_config;
-use crate::tls::alpn;
 
 /// A DNS client connection for DNS-over-QUIC
 #[must_use = "futures do nothing unless polled"]
@@ -307,7 +306,7 @@ impl QuicClientStreamBuilder {
         let crypto_config = if let Some(crypto_config) = self.crypto_config {
             crypto_config
         } else {
-            client_config().map_err(|e| {
+            tls_config::client_config().map_err(|e| {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("failed to initialize default TLS client config: {e}"),

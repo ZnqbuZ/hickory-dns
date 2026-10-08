@@ -1,4 +1,10 @@
-use quinn::{TransportConfig, VarInt};
+use quinn::{EndpointConfig, TransportConfig, VarInt};
+
+/// Returns a default endpoint configuration for DNS-over-HTTP/3
+pub(crate) fn endpoint() -> EndpointConfig {
+    EndpointConfig::default()
+}
+
 /// Returns a default transport configuration for DNS-over-HTTP/3
 pub(crate) fn transport() -> TransportConfig {
     let mut transport_config = TransportConfig::default();
@@ -14,9 +20,4 @@ pub(crate) fn transport() -> TransportConfig {
     transport_config.max_concurrent_uni_streams(VarInt::from_u32(4));
 
     transport_config
-}
-
-/// Returns a default endpoint configuration for DNS-over-HTTP/3
-pub(crate) fn endpoint() -> quinn::EndpointConfig {
-    quinn::EndpointConfig::default()
 }

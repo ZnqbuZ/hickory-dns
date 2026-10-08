@@ -18,7 +18,7 @@ use crate::{
         NetError, h2,
         http::{self, Version},
         runtime::{Accepted, DnsTcpListener, DnsTcpStream},
-        tls as tls_config,
+        tls::{alpn, tls_config},
         xfer::Protocol,
     },
     proto::rr::Record,
@@ -290,5 +290,3 @@ impl ResponseHandler for HttpsResponseHandle {
         Ok(info)
     }
 }
-
-use crate::net::tls::alpn;

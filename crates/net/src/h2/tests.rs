@@ -22,7 +22,7 @@ use {
     crate::proto::op::{DnsRequest, DnsRequestOptions, Edns, Query},
     crate::proto::rr::{Name, RData, RecordType},
     crate::runtime::TokioRuntimeProvider,
-    crate::tls::{alpn::ALPN_H2, client_config},
+    crate::tls::{alpn, tls_config},
     crate::xfer::{DnsRequestSender, FirstAnswer},
     core::net::SocketAddr,
     core::str::FromStr,
@@ -245,8 +245,8 @@ async fn test_https_cloudflare() {
 
 #[cfg(any(feature = "webpki-roots", feature = "rustls-platform-verifier"))]
 fn client_config_h2() -> ClientConfig {
-    let mut config = client_config().unwrap();
-    config.alpn_protocols = vec![ALPN_H2.to_vec()];
+    let mut config = tls_config::client_config().unwrap();
+    config.alpn_protocols = vec![alpn::ALPN_H2.to_vec()];
     config
 }
 

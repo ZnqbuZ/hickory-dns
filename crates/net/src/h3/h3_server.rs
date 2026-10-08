@@ -12,7 +12,8 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::tls as tls_config;
+use super::h3_config;
+use crate::tls::{alpn, tls_config};
 use crate::{
     error::NetError,
     quic::{
@@ -27,71 +28,6 @@ use quinn::Connecting;
 use rustls::server::ResolvesServerCert;
 use rustls::server::ServerConfig as TlsServerConfig;
 use tokio::net::UdpSocket;
-
-/// A listener for established DNS-over-HTTP/3 connections.
-#[derive(Debug)]
-pub struct H3Server {
-    endpoint: QuicEndpoint<H3Connection>,
-}
-
-impl H3Server {
-    /// Binds a UDP socket and constructs a listener with a default TLS configuration.
-    pub async fn new(
-        name_server: SocketAddr,
-        cert_resolver: Arc<dyn ResolvesServerCert>,
-    ) -> Result<Self, NetError> {
-        Self::with_socket(UdpSocket::bind(name_server).await?, cert_resolver)
-    }
-
-    /// Constructs a listener with an existing socket and a default TLS configuration.
-    pub fn with_socket(
-        socket: impl IntoQuicSocket,
-        cert_resolver: Arc<dyn ResolvesServerCert>,
-    ) -> Result<Self, NetError> {
-        let config = tls_config::default_quic_server_config(alpn::ALPN_H3, cert_resolver);
-        Self::with_socket_and_tls_config(socket, Arc::new(config))
-    }
-
-    /// Constructs a listener with an existing socket and a custom TLS configuration.
-    ///
-    /// The TLS configuration should support TLS 1.3 and have the H3 ALPN protocol enabled.
-    pub fn with_socket_and_tls_config(
-        socket: impl IntoQuicSocket,
-        tls_config: Arc<TlsServerConfig>,
-    ) -> Result<Self, NetError> {
-        let endpoint = QuicEndpoint::new(
-            socket,
-            tls_config,
-            super::h3_config::endpoint(),
-            super::h3_config::transport(),
-        )?;
-
-        Ok(Self { endpoint })
-    }
-
-    /// Accept the next connection and its recorded metadata after its QUIC and HTTP/3 handshakes.
-    ///
-    /// Handshakes run concurrently. The timeout covers both protocol initialization steps.
-    /// Handshake failures are logged and skipped; synchronous accept errors are returned.
-    /// Dropping the listener aborts pending handshakes without waiting for them to finish.
-    ///
-    /// Cancelling this future leaves already-started handshakes owned by the listener.
-    /// A subsequent call can receive their completed connections.
-    pub async fn accept(
-        &mut self,
-        timeout: Option<Duration>,
-    ) -> Option<Result<Accepted<H3Connection>, NetError>> {
-        self.endpoint.accept(timeout).await
-    }
-
-    /// Returns the address this listener is listening on.
-    ///
-    /// This can be useful in tests, where a random port can be associated with the server by binding on `127.0.0.1:0` and then getting the
-    ///   associated port address with this function.
-    pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
-        self.endpoint.local_addr()
-    }
-}
 
 /// An HTTP/3 connection.
 pub struct H3Connection {
@@ -127,4 +63,67 @@ impl QuicHandshake for H3Connection {
     }
 }
 
-use crate::tls::alpn;
+/// A listener for established DNS-over-HTTP/3 connections.
+#[derive(Debug)]
+pub struct H3Server {
+    endpoint: QuicEndpoint<H3Connection>,
+}
+
+impl H3Server {
+    /// Binds a UDP socket and constructs a listener with a default TLS configuration.
+    pub async fn new(
+        name_server: SocketAddr,
+        cert_resolver: Arc<dyn ResolvesServerCert>,
+    ) -> Result<Self, NetError> {
+        Self::with_socket(UdpSocket::bind(name_server).await?, cert_resolver)
+    }
+
+    /// Constructs a listener with an existing socket and a default TLS configuration.
+    pub fn with_socket(
+        socket: impl IntoQuicSocket,
+        cert_resolver: Arc<dyn ResolvesServerCert>,
+    ) -> Result<Self, NetError> {
+        let config = tls_config::default_quic_server_config(alpn::ALPN_H3, cert_resolver);
+        Self::with_socket_and_tls_config(socket, Arc::new(config))
+    }
+
+    /// Constructs a listener with an existing socket and a custom TLS configuration.
+    ///
+    /// The TLS configuration should support TLS 1.3 and have the H3 ALPN protocol enabled.
+    pub fn with_socket_and_tls_config(
+        socket: impl IntoQuicSocket,
+        tls_config: Arc<TlsServerConfig>,
+    ) -> Result<Self, NetError> {
+        let endpoint = QuicEndpoint::new(
+            socket,
+            tls_config,
+            h3_config::endpoint(),
+            h3_config::transport(),
+        )?;
+
+        Ok(Self { endpoint })
+    }
+
+    /// Accept the next connection and its recorded metadata after its QUIC and HTTP/3 handshakes.
+    ///
+    /// Handshakes run concurrently. The timeout covers both protocol initialization steps.
+    /// Handshake failures are logged and skipped; synchronous accept errors are returned.
+    /// Dropping the listener aborts pending handshakes without waiting for them to finish.
+    ///
+    /// Cancelling this future leaves already-started handshakes owned by the listener.
+    /// A subsequent call can receive their completed connections.
+    pub async fn accept(
+        &mut self,
+        timeout: Option<Duration>,
+    ) -> Option<Result<Accepted<H3Connection>, NetError>> {
+        self.endpoint.accept(timeout).await
+    }
+
+    /// Returns the address this listener is listening on.
+    ///
+    /// This can be useful in tests, where a random port can be associated with the server by binding on `127.0.0.1:0` and then getting the
+    ///   associated port address with this function.
+    pub fn local_addr(&self) -> Result<SocketAddr, io::Error> {
+        self.endpoint.local_addr()
+    }
+}

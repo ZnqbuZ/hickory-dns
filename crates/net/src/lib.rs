@@ -28,6 +28,7 @@ pub mod tcp;
 #[cfg(feature = "__tls")]
 pub mod tls;
 pub mod udp;
+mod utils;
 pub mod xfer;
 
 #[doc(hidden)]
@@ -38,5 +39,3 @@ pub use crate::xfer::dns_handle::{DnsHandle, DnsStreamHandle};
 pub use crate::xfer::dns_multiplexer::DnsMultiplexer;
 #[doc(hidden)]
 pub use crate::xfer::retry_dns_handle::RetryDnsHandle;
-
-mod utils;

@@ -11,6 +11,7 @@ use futures_util::future::BoxFuture;
 use rustls::{ClientConfig, pki_types::ServerName};
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
+use tokio_rustls::client::TlsStream;
 use tracing::debug;
 
 use crate::{
@@ -24,8 +25,7 @@ use crate::{
 };
 
 /// Type of TlsClientStream used with Rustls
-pub type TlsClientStream<S> =
-    TcpClientStream<AsyncIoTokioAsStd<tokio_rustls::client::TlsStream<AsyncIoStdAsTokio<S>>>>;
+pub type TlsClientStream<S> = TcpClientStream<AsyncIoTokioAsStd<TlsStream<AsyncIoStdAsTokio<S>>>>;
 
 /// Create a new [`DnsExchange`] wrapped around a multiplexed [`TlsClientStream`],
 /// optionally binding the underlying TCP socket to a local address.
@@ -198,4 +198,4 @@ pub(super) async fn connect_tls_stream<S: DnsTcpStream>(
 }
 
 /// Predefined type for abstracting the TlsClientStream with TokioTls
-pub type TokioTlsClientStream<S> = tokio_rustls::client::TlsStream<AsyncIoStdAsTokio<S>>;
+pub type TokioTlsClientStream<S> = TlsStream<AsyncIoStdAsTokio<S>>;

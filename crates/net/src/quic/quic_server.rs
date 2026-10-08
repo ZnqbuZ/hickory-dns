@@ -10,13 +10,40 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::{IntoQuicSocket, quic_config, quic_stream::QuicStream};
-use crate::tls as tls_config;
+use super::{
+    IntoQuicSocket, quic_config,
+    quic_endpoint::{QuicEndpoint, QuicHandshake},
+    quic_stream::QuicStream,
+};
+use crate::tls::{alpn, tls_config};
 use crate::{error::NetError, runtime::Accepted};
 use quinn::{Connecting, Connection};
 use rustls::server::ResolvesServerCert;
 use rustls::server::ServerConfig as TlsServerConfig;
 use tokio::net::UdpSocket;
+
+/// An established QUIC connection that accepts bidirectional streams.
+pub struct QuicStreams {
+    connection: Connection,
+}
+
+impl QuicStreams {
+    /// Get the next bidirectional stream from the client
+    pub async fn next(&mut self) -> Result<QuicStream, NetError> {
+        match self.connection.accept_bi().await {
+            Ok((send, receive)) => Ok(QuicStream::new(send, receive)),
+            Err(e) => Err(NetError::from(e)),
+        }
+    }
+}
+
+impl QuicHandshake for QuicStreams {
+    async fn handshake(connecting: Connecting) -> Result<Self, NetError> {
+        Ok(Self {
+            connection: connecting.await?,
+        })
+    }
+}
 
 /// A listener for established DNS-over-QUIC connections.
 #[derive(Debug)]
@@ -82,30 +109,3 @@ impl QuicServer {
         self.endpoint.local_addr()
     }
 }
-
-use super::quic_endpoint::{QuicEndpoint, QuicHandshake};
-
-/// An established QUIC connection that accepts bidirectional streams.
-pub struct QuicStreams {
-    connection: Connection,
-}
-
-impl QuicStreams {
-    /// Get the next bidirectional stream from the client
-    pub async fn next(&mut self) -> Result<QuicStream, NetError> {
-        match self.connection.accept_bi().await {
-            Ok((send, receive)) => Ok(QuicStream::new(send, receive)),
-            Err(e) => Err(NetError::from(e)),
-        }
-    }
-}
-
-impl QuicHandshake for QuicStreams {
-    async fn handshake(connecting: Connecting) -> Result<Self, NetError> {
-        Ok(Self {
-            connection: connecting.await?,
-        })
-    }
-}
-
-use crate::tls::alpn;

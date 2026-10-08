@@ -37,16 +37,6 @@ pub fn client_config() -> Result<ClientConfig, rustls::Error> {
 
     Ok(builder.with_no_client_auth())
 }
-/// Instantiate a new [`CryptoProvider`] for use with rustls
-#[cfg(all(feature = "tls-aws-lc-rs", not(feature = "tls-ring")))]
-pub fn default_provider() -> CryptoProvider {
-    crypto::aws_lc_rs::default_provider()
-}
-/// Instantiate a new [`CryptoProvider`] for use with rustls
-#[cfg(feature = "tls-ring")]
-pub fn default_provider() -> CryptoProvider {
-    crypto::ring::default_provider()
-}
 /// Construct a default [`ServerConfig`] for TLS over TCP, such as DoT or HTTP/2.
 ///
 /// The returned configuration uses the safe default protocol versions and does not request client
@@ -83,4 +73,16 @@ pub fn default_quic_server_config(
 
     config.alpn_protocols = vec![alpn.to_vec()];
     config
+}
+
+/// Instantiate a new [`CryptoProvider`] for use with rustls
+#[cfg(all(feature = "tls-aws-lc-rs", not(feature = "tls-ring")))]
+pub fn default_provider() -> CryptoProvider {
+    crypto::aws_lc_rs::default_provider()
+}
+
+/// Instantiate a new [`CryptoProvider`] for use with rustls
+#[cfg(feature = "tls-ring")]
+pub fn default_provider() -> CryptoProvider {
+    crypto::ring::default_provider()
 }

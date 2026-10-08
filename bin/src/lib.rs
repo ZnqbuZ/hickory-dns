@@ -1,5 +1,3 @@
-#[cfg(feature = "__tls")]
-use hickory_net::tls::alpn;
 #[cfg(any(feature = "__tls", feature = "__https", feature = "__quic"))]
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,24 +32,25 @@ use tracing::{error, info};
 use hickory_server::proto::ProtoError;
 use hickory_server::proto::rr::rdata::opt::NSIDPayload;
 #[cfg(feature = "__tls")]
-use hickory_server::server as tls_config;
-use hickory_server::{server::Server, zone_handler::Catalog};
-
-use hickory_server::server::transport::Udp;
-
-use hickory_server::server::transport::Tcp;
-
-#[cfg(feature = "__tls")]
-use hickory_server::server::transport::Tls;
-
+use hickory_server::server::tls_config;
 #[cfg(feature = "__https")]
 use hickory_server::server::transport::Https;
-
 #[cfg(feature = "__quic")]
 use hickory_server::server::transport::Quic;
+#[cfg(feature = "__tls")]
+use hickory_server::server::transport::Tls;
+use hickory_server::{
+    server::{
+        Server,
+        transport::{Tcp, Udp},
+    },
+    zone_handler::Catalog,
+};
 
 mod config;
 use config::{Config, TcpSocketConfig, UdpSocketConfig};
+#[cfg(feature = "__tls")]
+use hickory_net::tls::alpn;
 
 #[cfg(feature = "__dnssec")]
 pub mod dnssec;

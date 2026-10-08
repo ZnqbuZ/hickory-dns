@@ -5,18 +5,20 @@ use core::marker::Send;
 use core::net::SocketAddr;
 use core::pin::Pin;
 use core::time::Duration;
-use std::fmt::Debug;
 #[cfg(feature = "__quic")]
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
+    fmt::Debug,
     future::poll_fn,
     io,
     task::{Context, Poll},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
 use futures_io::{AsyncRead, AsyncWrite};
+#[cfg(feature = "__quic")]
+use quinn::AsyncUdpSocket;
 #[cfg(any(test, feature = "tokio"))]
 use tokio::runtime::Runtime;
 #[cfg(any(test, feature = "tokio"))]
@@ -305,7 +307,7 @@ mod tokio_runtime {
             &self,
             local_addr: SocketAddr,
             _server_addr: SocketAddr,
-        ) -> Result<Arc<dyn quinn::AsyncUdpSocket>, io::Error> {
+        ) -> Result<Arc<dyn AsyncUdpSocket>, io::Error> {
             let socket = std::net::UdpSocket::bind(local_addr)?;
             quinn::TokioRuntime.wrap_udp_socket(socket)
         }
@@ -420,7 +422,7 @@ pub trait QuicSocketBinder {
         &self,
         _local_addr: SocketAddr,
         _server_addr: SocketAddr,
-    ) -> Result<Arc<dyn quinn::AsyncUdpSocket>, io::Error>;
+    ) -> Result<Arc<dyn AsyncUdpSocket>, io::Error>;
 }
 
 /// Trait for TCP connection

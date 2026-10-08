@@ -11,18 +11,17 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::{
-    error::NetError,
-    http::{Version, fetch_body},
-};
 use bytes::{Bytes, BytesMut};
 use futures_util::stream::Stream;
-use http::{Method, Request, header::CONTENT_LENGTH};
+use http::header::CONTENT_LENGTH;
+use http::{Method, Request};
 use rustls::ServerConfig;
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 use tracing::{debug, warn};
 
+use crate::error::NetError;
+use crate::http::{Version, fetch_body};
 use crate::runtime::iocompat::AsyncIoStdAsTokio;
 use crate::runtime::{Accepted, DnsTcpListener};
 use crate::tcp::TcpListener;

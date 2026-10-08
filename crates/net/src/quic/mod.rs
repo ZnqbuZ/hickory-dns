@@ -9,7 +9,6 @@
 
 use std::{io, sync::Arc};
 
-pub use quinn::AsyncUdpSocket;
 use quinn::Runtime;
 
 mod quic_client_stream;
@@ -23,6 +22,7 @@ pub(crate) use self::quic_client_stream::connect_quic;
 pub use self::quic_client_stream::{QuicClientStream, QuicClientStreamBuilder};
 pub use self::quic_server::{QuicServer, QuicStreams};
 pub use self::quic_stream::{DoqErrorCode, QuicStream};
+pub use quinn::AsyncUdpSocket;
 
 /// Adapts an input socket into the abstract socket that the QUIC based server endpoints require.
 ///

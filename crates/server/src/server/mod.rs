@@ -440,11 +440,11 @@ impl<R: ResponseHandler> ResponseHandler for ReportingResponseHandler<R> {
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
-    use std::time::Duration;
     use std::{
         io,
+        net::SocketAddr,
         task::{Context, Poll},
+        time::Duration,
     };
 
     use futures_util::future;
@@ -453,23 +453,25 @@ mod tests {
     #[cfg(feature = "__tls")]
     use test_support::TestCertificates;
     use test_support::subscribe;
-    use tokio::net::TcpStream;
-    use tokio::net::{TcpListener, UdpSocket};
-    use tokio::time::timeout;
+    use tokio::{
+        net::{TcpListener, TcpStream, UdpSocket},
+        time::timeout,
+    };
 
     use super::*;
-    use crate::net::runtime::{Accepted, DnsTcpListener, iocompat::AsyncIoTokioAsStd};
     #[cfg(feature = "__h3")]
     use crate::server::transport::H3;
     #[cfg(feature = "__https")]
     use crate::server::transport::Https;
     #[cfg(feature = "__quic")]
     use crate::server::transport::Quic;
-    use crate::server::transport::Tcp;
     #[cfg(feature = "__tls")]
     use crate::server::transport::Tls;
-    use crate::server::transport::Udp;
-    use crate::zone_handler::Catalog;
+    use crate::{
+        net::runtime::{Accepted, DnsTcpListener, iocompat::AsyncIoTokioAsStd},
+        server::transport::{Tcp, Udp},
+        zone_handler::Catalog,
+    };
 
     #[tokio::test]
     async fn abort() {

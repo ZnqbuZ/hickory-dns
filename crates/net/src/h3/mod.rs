@@ -22,6 +22,8 @@ pub use h3_client_stream::{H3ClientStream, H3ClientStreamBuilder};
 mod h3_config;
 pub mod h3_server;
 
+pub use h3_server::{H3Connection, H3Server};
+
 /// [`Stream`] adapter for h3 body streaming.
 pub struct BodyStream<T>(T);
 
@@ -57,5 +59,3 @@ where
         Self(stream)
     }
 }
-
-pub use h3_server::{H3Connection, H3Server};

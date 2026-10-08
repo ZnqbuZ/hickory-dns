@@ -29,6 +29,7 @@ use crate::http::{HttpSender, RequestContext, SetHeaders, Version, content_lengt
 use crate::proto::op::DnsRequest;
 use crate::runtime::iocompat::AsyncIoStdAsTokio;
 use crate::runtime::{DnsTcpStream, RuntimeProvider, Spawn};
+use crate::tls::alpn;
 use crate::xfer::{CONNECT_TIMEOUT, DnsExchange, DnsRequestSender, DnsResponseStream};
 
 /// A DNS client connection for DNS-over-HTTPS
@@ -171,7 +172,7 @@ pub fn connect(
     // ensure the ALPN protocol is set correctly
     if client_config.alpn_protocols.is_empty() {
         let mut client_cfg = (*client_config).clone();
-        client_cfg.alpn_protocols = vec![ALPN_H2.to_vec()];
+        client_cfg.alpn_protocols = vec![alpn::ALPN_H2.to_vec()];
 
         client_config = Arc::new(client_cfg);
     }
@@ -248,5 +249,3 @@ impl HttpSender for HttpsClientStream {
         &self.context
     }
 }
-
-use crate::tls::alpn::ALPN_H2;

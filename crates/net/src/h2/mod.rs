@@ -4,5 +4,6 @@ mod h2_client_stream;
 mod h2_listener;
 #[cfg(test)]
 mod tests;
-pub use h2_client_stream::{HttpsClientStream, HttpsClientStreamBuilder, connect};
-pub use h2_listener::{HttpsConnection, HttpsListener, message_from};
+
+pub use self::h2_client_stream::{HttpsClientStream, HttpsClientStreamBuilder, connect};
+pub use self::h2_listener::{HttpsConnection, HttpsListener, message_from};
