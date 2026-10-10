@@ -2,15 +2,47 @@
 
 use std::{future::Future, sync::Arc};
 
+use tokio::task::JoinSet;
+
 use crate::net::NetError;
 use crate::server::{ServerContext, request_handler::RequestHandler};
 
-pub(super) trait Transport: Send + 'static {
+pub(super) trait Transport: Sized + Send + 'static {
+    /// Listener closure returns `Ok(false)` so it can be checked against shutdown.
+    /// Successful input and recoverable errors return `Ok(true)`; other errors propagate directly.
+    fn accept<H: RequestHandler>(
+        &mut self,
+        cx: Arc<ServerContext<H>>,
+        tasks: &mut JoinSet<()>,
+    ) -> impl Future<Output = Result<bool, NetError>> + Send;
+
     /// Runs a transport whose listener was initialized by its constructor.
     fn run<H: RequestHandler>(
-        self,
+        mut self,
         cx: Arc<ServerContext<H>>,
-    ) -> impl Future<Output = Result<(), NetError>> + Send + 'static;
+    ) -> impl Future<Output = Result<(), NetError>> + Send + 'static {
+        async move {
+            let mut tasks = JoinSet::new();
+
+            while let Some(result) = cx // stop on graceful shutdown
+                .shutdown
+                .run_until_cancelled(self.accept(cx.clone(), &mut tasks))
+                .await
+            {
+                if !result? {
+                    break;
+                }
+
+                while tasks.try_join_next().is_some() {}
+            }
+
+            if cx.shutdown.is_cancelled() {
+                Ok(())
+            } else {
+                Err(NetError::from("unexpected close of socket"))
+            }
+        }
+    }
 }
 
 mod udp;
