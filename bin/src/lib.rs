@@ -602,26 +602,13 @@ impl ServerSetup<'_> {
 
             self.server.register(
                 Tcp::new(tcp_listener)
-                    .response_buffer_size(self.tcp_socket_config.response_buffer_size)
-                    .stream_timeout(self.stream_timeout()),
+                    .idle_timeout(self.idle_timeout)
+                    .request_timeout(self.request_timeout)
+                    .response_buffer_size(self.tcp_socket_config.response_buffer_size),
             );
         }
 
         Ok(())
-    }
-
-    /// Computes the timeout to be passed to `TimeoutStream`.
-    ///
-    /// This adds the request timeout and idle timeout together, or returns None if either timeout
-    /// has been disabled. Since `TimeoutStream` applies a timeout to the combination of waiting
-    /// for the next request to begin and waiting for the request to be read to the end, we need
-    /// to combine these two timeout configuration parameters. If either timeout has been disabled,
-    /// then `TimeoutStream`'s timeout should be disabled entirely.
-    fn stream_timeout(&self) -> Option<Duration> {
-        match (self.request_timeout, self.idle_timeout) {
-            (Some(request_timeout), Some(idle_timeout)) => Some(request_timeout + idle_timeout),
-            _ => None,
-        }
     }
 
     #[cfg(feature = "__tls")]
@@ -653,7 +640,8 @@ impl ServerSetup<'_> {
             self.server.register(
                 Tls::new(tls_listener, Arc::new(tls_config))
                     .handshake_timeout(self.handshake_timeout)
-                    .stream_timeout(self.stream_timeout()),
+                    .idle_timeout(self.idle_timeout)
+                    .request_timeout(self.request_timeout),
             );
         }
         Ok(())

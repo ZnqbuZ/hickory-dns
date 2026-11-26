@@ -80,8 +80,6 @@ mod h3_handler;
 mod quic_handler;
 mod request_handler;
 pub use request_handler::{Request, RequestHandler, ResponseInfo};
-mod timeout_stream;
-pub use timeout_stream::TimeoutStream;
 
 // TODO, would be nice to have a Slab for buffers here...
 /// A Futures based implementation of a DNS server
@@ -489,7 +487,8 @@ impl<S: DnsUdpSocket + 'static> SealedTransport for Udp<S> {
 #[derive(Debug)]
 pub struct Tcp<L: DnsTcpListener> {
     listener: L,
-    stream_timeout: Option<Duration>,
+    idle_timeout: Option<Duration>,
+    request_timeout: Option<Duration>,
     response_buffer_size: usize,
 }
 
@@ -497,13 +496,32 @@ impl<L: DnsTcpListener> Tcp<L> {
     /// Constructs a new TCP transport.
     ///
     /// The `listener` must be already bound to the desired local address.
-    /// The stream timeout defaults to [`DEFAULT_STREAM_TIMEOUT`], and the response buffer
-    /// defaults to [`DEFAULT_STREAM_BUFFER_SIZE`].
+    /// The idle timeout defaults to [`DEFAULT_IDLE_TIMEOUT`], the request timeout defaults to
+    /// [`DEFAULT_REQUEST_TIMEOUT`], and the response buffer defaults to
+    /// [`DEFAULT_STREAM_BUFFER_SIZE`].
     pub fn new(listener: L) -> Self {
         Self {
             listener,
-            stream_timeout: Some(DEFAULT_STREAM_TIMEOUT),
+            idle_timeout: Some(DEFAULT_IDLE_TIMEOUT),
+            request_timeout: Some(DEFAULT_REQUEST_TIMEOUT),
             response_buffer_size: DEFAULT_STREAM_BUFFER_SIZE,
+        }
+    }
+
+    /// Sets the timeout before closing an idle connection; pass `None` to disable it.
+    pub fn idle_timeout(self, idle_timeout: Option<Duration>) -> Self {
+        Self {
+            idle_timeout,
+            ..self
+        }
+    }
+
+    /// Sets the timeout for receiving a complete request once it has started; pass `None` to
+    /// disable it.
+    pub fn request_timeout(self, request_timeout: Option<Duration>) -> Self {
+        Self {
+            request_timeout,
+            ..self
         }
     }
 
@@ -514,23 +532,14 @@ impl<L: DnsTcpListener> Tcp<L> {
             ..self
         }
     }
-
-    /// Sets the timeout for receiving the next request on a stream; pass `None` to disable it.
-    ///
-    /// Connections that do not send a complete request within this period are closed.
-    pub fn stream_timeout(self, stream_timeout: Option<Duration>) -> Self {
-        Self {
-            stream_timeout,
-            ..self
-        }
-    }
 }
 
 impl<L: DnsTcpListener> SealedTransport for Tcp<L> {
     async fn run<H: RequestHandler>(self, cx: Arc<ServerContext<H>>) -> Result<(), NetError> {
         let Self {
             mut listener,
-            stream_timeout,
+            idle_timeout,
+            request_timeout,
             response_buffer_size,
         } = self;
 
@@ -574,9 +583,11 @@ impl<L: DnsTcpListener> SealedTransport for Tcp<L> {
                     src_addr,
                     response_buffer_size,
                 );
-                let mut timeout_stream = TimeoutStream::new(buf_stream, stream_timeout);
+                let mut buf_stream = buf_stream
+                    .with_idle_timeout(idle_timeout)
+                    .with_request_timeout(request_timeout);
 
-                while let Some(message) = timeout_stream.next().await {
+                while let Some(message) = buf_stream.next().await {
                     let message = match message {
                         Ok(message) => message,
                         Err(error) => {
@@ -614,7 +625,8 @@ pub struct Tls<L: DnsTcpListener> {
     listener: L,
     tls_config: Arc<ServerConfig>,
     handshake_timeout: Option<Duration>,
-    stream_timeout: Option<Duration>,
+    idle_timeout: Option<Duration>,
+    request_timeout: Option<Duration>,
 }
 
 #[cfg(feature = "__tls")]
@@ -622,14 +634,15 @@ impl<L: DnsTcpListener> Tls<L> {
     /// Constructs a new TLS transport with the provided [`ServerConfig`].
     ///
     /// The `listener` must already be bound to a local address, and `tls_config` should enable the
-    /// `dot` ALPN protocol. Timeouts default to [`DEFAULT_HANDSHAKE_TIMEOUT`] and
-    /// [`DEFAULT_STREAM_TIMEOUT`].
+    /// `dot` ALPN protocol. Timeouts default to [`DEFAULT_HANDSHAKE_TIMEOUT`],
+    /// [`DEFAULT_IDLE_TIMEOUT`], and [`DEFAULT_REQUEST_TIMEOUT`].
     pub fn new(listener: L, tls_config: Arc<ServerConfig>) -> Self {
         Self {
             listener,
             tls_config,
             handshake_timeout: Some(DEFAULT_HANDSHAKE_TIMEOUT),
-            stream_timeout: Some(DEFAULT_STREAM_TIMEOUT),
+            idle_timeout: Some(DEFAULT_IDLE_TIMEOUT),
+            request_timeout: Some(DEFAULT_REQUEST_TIMEOUT),
         }
     }
 
@@ -641,12 +654,19 @@ impl<L: DnsTcpListener> Tls<L> {
         }
     }
 
-    /// Sets the timeout for receiving the next request on a stream; pass `None` to disable it.
-    ///
-    /// Connections that do not send a complete request within this period are closed.
-    pub fn stream_timeout(self, stream_timeout: Option<Duration>) -> Self {
+    /// Sets the timeout before closing an idle connection; pass `None` to disable it.
+    pub fn idle_timeout(self, idle_timeout: Option<Duration>) -> Self {
         Self {
-            stream_timeout,
+            idle_timeout,
+            ..self
+        }
+    }
+
+    /// Sets the timeout for receiving a complete request once it has started; pass `None` to
+    /// disable it.
+    pub fn request_timeout(self, request_timeout: Option<Duration>) -> Self {
+        Self {
+            request_timeout,
             ..self
         }
     }
@@ -659,7 +679,8 @@ impl<L: DnsTcpListener> SealedTransport for Tls<L> {
             mut listener,
             tls_config,
             handshake_timeout,
-            stream_timeout,
+            idle_timeout,
+            request_timeout,
         } = self;
 
         let tls_acceptor = TlsAcceptor::from(tls_config);
@@ -719,8 +740,10 @@ impl<L: DnsTcpListener> SealedTransport for Tls<L> {
                 };
                 debug!(%src_addr, "accepted TLS request");
                 let (buf_stream, stream_handle) = tls_from_stream(tls_stream, src_addr);
-                let mut timeout_stream = TimeoutStream::new(buf_stream, stream_timeout);
-                while let Some(message) = timeout_stream.next().await {
+                let mut buf_stream = buf_stream
+                    .with_idle_timeout(idle_timeout)
+                    .with_request_timeout(request_timeout);
+                while let Some(message) = buf_stream.next().await {
                     let message = match message {
                         Ok(message) => message,
                         Err(error) => {
@@ -757,13 +780,15 @@ impl<L: DnsTcpListener + fmt::Debug> fmt::Debug for Tls<L> {
             listener,
             tls_config: _,
             handshake_timeout,
-            stream_timeout,
+            idle_timeout,
+            request_timeout,
         } = self;
 
         f.debug_struct("Tls")
             .field("listener", listener)
             .field("handshake_timeout", handshake_timeout)
-            .field("stream_timeout", stream_timeout)
+            .field("idle_timeout", idle_timeout)
+            .field("request_timeout", request_timeout)
             .finish_non_exhaustive()
     }
 }
@@ -1188,13 +1213,6 @@ pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Default timeout before closing an idle connection.
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Default timeout for receiving the next request on a TCP or TLS stream.
-///
-/// A single timer covers both the idle period and receiving the request, so this is
-/// [`DEFAULT_IDLE_TIMEOUT`] plus [`DEFAULT_REQUEST_TIMEOUT`].
-pub const DEFAULT_STREAM_TIMEOUT: Duration =
-    DEFAULT_IDLE_TIMEOUT.saturating_add(DEFAULT_REQUEST_TIMEOUT);
 
 #[cfg(test)]
 mod tests {
