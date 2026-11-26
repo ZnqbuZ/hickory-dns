@@ -15,8 +15,8 @@ use core::time::Duration;
 use std::io;
 
 use futures_io::IoSlice;
+use futures_util::future::Future;
 use futures_util::stream::Stream;
-use futures_util::{self, future::Future, ready};
 use tracing::{debug, trace};
 
 use crate::proto::op::SerialMessage;
@@ -71,28 +71,15 @@ pub struct TcpStream<S: DnsTcpStream> {
     send_state: Option<WriteTcpState>,
     read_state: ReadTcpState,
     peer_addr: SocketAddr,
+    idle_timeout: Option<Duration>,
+    request_timeout: Option<Duration>,
+    read_timeout: Option<ReadTimeout>,
 }
 
 impl<S: DnsTcpStream> TcpStream<S> {
     /// Returns the address of the peer connection.
     pub fn peer_addr(&self) -> SocketAddr {
         self.peer_addr
-    }
-
-    fn pollable_split(
-        &mut self,
-    ) -> (
-        &mut S,
-        &mut StreamReceiver,
-        &mut Option<WriteTcpState>,
-        &mut ReadTcpState,
-    ) {
-        (
-            &mut self.socket,
-            &mut self.outbound_messages,
-            &mut self.send_state,
-            &mut self.read_state,
-        )
     }
 
     /// Initializes a TcpStream with an established connection.
@@ -145,6 +132,9 @@ impl<S: DnsTcpStream> TcpStream<S> {
                 bytes: [0u8; 2],
             },
             peer_addr,
+            idle_timeout: None,
+            request_timeout: None,
+            read_timeout: None,
         }
     }
 
@@ -169,6 +159,28 @@ impl<S: DnsTcpStream> TcpStream<S> {
         (stream_fut, message_sender)
     }
 
+    /// Sets the timeout before closing an idle connection while waiting for the next message.
+    ///
+    /// Pass `None` to disable the idle timeout.
+    pub fn with_idle_timeout(self, idle_timeout: Option<Duration>) -> Self {
+        Self {
+            idle_timeout,
+            read_timeout: None,
+            ..self
+        }
+    }
+
+    /// Sets the timeout for receiving a complete message once reading has started.
+    ///
+    /// Pass `None` to disable the request timeout.
+    pub fn with_request_timeout(self, request_timeout: Option<Duration>) -> Self {
+        Self {
+            request_timeout,
+            read_timeout: None,
+            ..self
+        }
+    }
+
     async fn connect_with_future<F: Future<Output = Result<S, io::Error>> + Send + 'static>(
         future: F,
         name_server: SocketAddr,
@@ -186,6 +198,9 @@ impl<S: DnsTcpStream> TcpStream<S> {
                 bytes: [0u8; 2],
             },
             peer_addr: name_server,
+            idle_timeout: None,
+            request_timeout: None,
+            read_timeout: None,
         })
     }
 }
@@ -193,9 +208,18 @@ impl<S: DnsTcpStream> TcpStream<S> {
 impl<S: DnsTcpStream> Stream for TcpStream<S> {
     type Item = io::Result<SerialMessage>;
 
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let peer = self.peer_addr;
-        let (socket, outbound_messages, send_state, read_state) = self.pollable_split();
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let Self {
+            socket,
+            outbound_messages,
+            send_state,
+            read_state,
+            peer_addr,
+            idle_timeout,
+            request_timeout,
+            read_timeout,
+        } = self.get_mut();
+        let peer = *peer_addr;
         let mut socket = Pin::new(socket);
         let mut outbound_messages = Pin::new(outbound_messages);
 
@@ -208,18 +232,26 @@ impl<S: DnsTcpStream> Stream for TcpStream<S> {
                 // sending...
                 match send_state {
                     Some(WriteTcpState::LenBytes { pos, length, bytes }) => {
-                        let wrote = ready!(socket.as_mut().poll_write_vectored(
+                        let Poll::Ready(result) = socket.as_mut().poll_write_vectored(
                             cx,
-                            &[IoSlice::new(&length[*pos..]), IoSlice::new(bytes)]
-                        ))?;
-                        *pos += wrote;
+                            &[IoSlice::new(&length[*pos..]), IoSlice::new(bytes)],
+                        ) else {
+                            return poll_existing_timeout(read_timeout, cx);
+                        };
+                        *pos += result?;
                     }
                     Some(WriteTcpState::Bytes { pos, bytes }) => {
-                        let wrote = ready!(socket.as_mut().poll_write(cx, &bytes[*pos..]))?;
-                        *pos += wrote;
+                        let Poll::Ready(result) = socket.as_mut().poll_write(cx, &bytes[*pos..])
+                        else {
+                            return poll_existing_timeout(read_timeout, cx);
+                        };
+                        *pos += result?;
                     }
                     Some(WriteTcpState::Flushing) => {
-                        ready!(socket.as_mut().poll_flush(cx))?;
+                        let Poll::Ready(result) = socket.as_mut().poll_flush(cx) else {
+                            return poll_existing_timeout(read_timeout, cx);
+                        };
+                        result?;
                     }
                     _ => (),
                 }
@@ -316,11 +348,21 @@ impl<S: DnsTcpStream> Stream for TcpStream<S> {
             let new_state: Option<ReadTcpState> = match read_state {
                 ReadTcpState::LenBytes { pos, bytes } => {
                     // debug!("reading length {}", bytes.len());
-                    let read = ready!(socket.as_mut().poll_read(cx, &mut bytes[*pos..]))?;
+                    let Poll::Ready(result) = socket.as_mut().poll_read(cx, &mut bytes[*pos..])
+                    else {
+                        break;
+                    };
+                    let read = match result {
+                        Ok(read) => read,
+                        Err(err) => {
+                            *read_timeout = None;
+                            return Poll::Ready(Some(Err(err)));
+                        }
+                    };
                     if read == 0 {
                         // the Stream was closed!
                         debug!("zero bytes read, stream closed?");
-                        //try!(self.socket.shutdown(Shutdown::Both)); // TODO: add generic shutdown function
+                        *read_timeout = None;
 
                         if *pos == 0 {
                             // Since this is the start of the next message, we have a clean end
@@ -349,10 +391,21 @@ impl<S: DnsTcpStream> Stream for TcpStream<S> {
                     }
                 }
                 ReadTcpState::Bytes { pos, bytes } => {
-                    let read = ready!(socket.as_mut().poll_read(cx, &mut bytes[*pos..]))?;
+                    let Poll::Ready(result) = socket.as_mut().poll_read(cx, &mut bytes[*pos..])
+                    else {
+                        break;
+                    };
+                    let read = match result {
+                        Ok(read) => read,
+                        Err(err) => {
+                            *read_timeout = None;
+                            return Poll::Ready(Some(Err(err)));
+                        }
+                    };
                     if read == 0 {
                         // the Stream was closed!
                         trace!("zero bytes read for message, stream closed?");
+                        *read_timeout = None;
 
                         // Since this is the start of the next message, we have a clean end
                         // try!(self.socket.shutdown(Shutdown::Both));  // TODO: add generic shutdown function
@@ -390,13 +443,71 @@ impl<S: DnsTcpStream> Stream for TcpStream<S> {
 
         // if the buffer is ready, return it, if not we're Pending
         if let Some(buffer) = ret_buf {
-            let src_addr = self.peer_addr;
-            Poll::Ready(Some(Ok(SerialMessage::new(buffer, src_addr))))
+            *read_timeout = None;
+            Poll::Ready(Some(Ok(SerialMessage::new(buffer, peer))))
         } else {
             debug!("bottomed out");
-            // at a minimum the outbound_messages should have been polled,
-            //  which will wake this future up later...
-            Poll::Pending
+            let phase = read_state.phase();
+            if read_timeout
+                .as_ref()
+                .is_none_or(|active| active.phase != phase)
+            {
+                let duration = match phase {
+                    ReadPhase::Idle => *idle_timeout,
+                    ReadPhase::Request => *request_timeout,
+                };
+                *read_timeout = duration.map(|duration| ReadTimeout {
+                    phase,
+                    duration,
+                    timer: S::Time::delay_for(duration),
+                });
+            }
+
+            poll_existing_timeout(read_timeout, cx)
+        }
+    }
+}
+
+fn poll_existing_timeout(
+    read_timeout: &mut Option<ReadTimeout>,
+    cx: &mut Context<'_>,
+) -> Poll<Option<io::Result<SerialMessage>>> {
+    let Some(active) = read_timeout.as_mut() else {
+        return Poll::Pending;
+    };
+
+    match active.timer.as_mut().poll(cx) {
+        Poll::Pending => Poll::Pending,
+        Poll::Ready(()) => {
+            let phase = active.phase;
+            let duration = active.duration;
+            *read_timeout = None;
+            debug!(?phase, ?duration, "timeout on TCP stream");
+            Poll::Ready(Some(Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("{phase:?} timeout elapsed after {duration:?}"),
+            ))))
+        }
+    }
+}
+
+struct ReadTimeout {
+    phase: ReadPhase,
+    duration: Duration,
+    timer: Pin<Box<dyn Future<Output = ()> + Send>>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReadPhase {
+    Idle,
+    Request,
+}
+
+impl ReadTcpState {
+    fn phase(&self) -> ReadPhase {
+        match self {
+            Self::LenBytes { pos: 0, .. } => ReadPhase::Idle,
+            Self::LenBytes { .. } | Self::Bytes { .. } => ReadPhase::Request,
         }
     }
 }
@@ -404,15 +515,20 @@ impl<S: DnsTcpStream> Stream for TcpStream<S> {
 #[cfg(test)]
 #[cfg(feature = "tokio")]
 mod tests {
-    use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use core::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
     use core::time::Duration;
     use std::io;
+    use std::sync::Arc;
 
     use futures_util::StreamExt;
     use test_support::subscribe;
+    use tokio::io::{AsyncWriteExt, duplex};
+    use tokio::sync::Barrier;
+    use tokio::time::sleep;
 
     use super::TcpStream;
     use crate::proto::op::SerialMessage;
+    use crate::runtime::iocompat::AsyncIoTokioAsStd;
     use crate::runtime::{RuntimeProvider, TokioRuntimeProvider};
     use crate::tcp::tests::tcp_stream_test;
     use crate::xfer::dns_handle::DnsStreamHandle;
@@ -455,5 +571,150 @@ mod tests {
             panic!("expected an error for the oversized message");
         };
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_tcp_stream_no_timeout() {
+        subscribe();
+
+        for timeout in [Some(Duration::from_secs(360)), None] {
+            let (mut client, server) = duplex(64);
+            let (stream, _sender) =
+                TcpStream::from_stream(AsyncIoTokioAsStd(server), test_peer_addr());
+            let mut stream = stream
+                .with_idle_timeout(timeout)
+                .with_request_timeout(timeout);
+
+            client.write_all(&[0, 2, 0xaa, 0xbb]).await.unwrap();
+            client.write_all(&[0, 1, 0xcc]).await.unwrap();
+            drop(client);
+
+            let first = stream.next().await.unwrap().unwrap();
+            assert_eq!(first.bytes(), &[0xaa, 0xbb]);
+
+            let second = stream.next().await.unwrap().unwrap();
+            assert_eq!(second.bytes(), &[0xcc]);
+
+            assert!(stream.next().await.is_none());
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_tcp_stream_idle_timeout() {
+        subscribe();
+
+        let (_client, server) = duplex(64);
+        let (stream, _sender) = TcpStream::from_stream(AsyncIoTokioAsStd(server), test_peer_addr());
+        let mut stream = stream
+            .with_idle_timeout(Some(Duration::from_secs(1)))
+            .with_request_timeout(Some(Duration::from_secs(5)));
+
+        let Some(Err(err)) = stream.next().await else {
+            panic!("expected timeout error");
+        };
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_tcp_stream_request_timeout_after_idle() {
+        subscribe();
+
+        let (mut client, server) = duplex(64);
+        let (stream, _sender) = TcpStream::from_stream(AsyncIoTokioAsStd(server), test_peer_addr());
+        let mut stream = stream
+            .with_idle_timeout(Some(Duration::from_secs(1)))
+            .with_request_timeout(Some(Duration::from_secs(1)));
+
+        let send_task = tokio::spawn(async move {
+            // Wait 800ms while idle (< 1s idle_timeout), then begin the frame.
+            sleep(Duration::from_millis(800)).await;
+            client.write_all(&[0, 4]).await.unwrap();
+
+            // Finish the frame 500ms later (total 1.3s > idle_timeout, but 500ms < request_timeout).
+            sleep(Duration::from_millis(500)).await;
+            client.write_all(&[1, 2, 3, 4]).await.unwrap();
+
+            // Start a second frame and stall past request_timeout.
+            sleep(Duration::from_millis(200)).await;
+            client.write_all(&[0]).await.unwrap();
+            sleep(Duration::from_secs(2)).await;
+            client
+        });
+
+        let msg = stream.next().await.unwrap().unwrap();
+        assert_eq!(msg.bytes(), &[1, 2, 3, 4]);
+
+        let Some(Err(err)) = stream.next().await else {
+            panic!("expected timeout error");
+        };
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+
+        send_task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_tcp_stream_slowloris_drip() {
+        subscribe();
+
+        let (mut client, server) = duplex(64);
+        let (stream, _sender) = TcpStream::from_stream(AsyncIoTokioAsStd(server), test_peer_addr());
+        let mut stream = stream
+            .with_idle_timeout(None)
+            .with_request_timeout(Some(Duration::from_secs(1)));
+
+        let send_task = tokio::spawn(async move {
+            // Drip-feed 1 byte every 400ms; total 6 bytes would take 2.0s > 1s request_timeout.
+            for byte in [0, 4, 1, 2, 3, 4] {
+                client.write_all(&[byte]).await.unwrap();
+                sleep(Duration::from_millis(400)).await;
+            }
+        });
+
+        let Some(Err(err)) = stream.next().await else {
+            panic!("expected timeout error");
+        };
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+
+        send_task.abort();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_tcp_stream_delay_between_polls() {
+        subscribe();
+
+        let (mut client, server) = duplex(64);
+        let (stream, _sender) = TcpStream::from_stream(AsyncIoTokioAsStd(server), test_peer_addr());
+        let mut stream = stream
+            .with_idle_timeout(Some(Duration::from_secs(1)))
+            .with_request_timeout(Some(Duration::from_secs(1)));
+
+        let barrier = Arc::new(Barrier::new(2));
+        let send_task = tokio::spawn({
+            let barrier = barrier.clone();
+            async move {
+                for byte in [1u8, 2] {
+                    sleep(Duration::from_millis(500)).await;
+                    client.write_all(&[0, 1, byte]).await.unwrap();
+                    barrier.wait().await;
+                }
+            }
+        });
+
+        let first = stream.next().await.unwrap().unwrap();
+        assert_eq!(first.bytes(), &[1]);
+
+        // Simulate slow request handling before polling for the next message.
+        sleep(Duration::from_secs(2)).await;
+        barrier.wait().await;
+
+        let second = stream.next().await.unwrap().unwrap();
+        assert_eq!(second.bytes(), &[2]);
+
+        barrier.wait().await;
+        send_task.await.unwrap();
+    }
+
+    fn test_peer_addr() -> SocketAddr {
+        SocketAddr::from((Ipv4Addr::LOCALHOST, 53))
     }
 }
